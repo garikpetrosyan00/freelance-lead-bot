@@ -44,6 +44,10 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - FREE: only MEDIUM/HIGH matches, daily cap of 5 notifications.
 - PRO: LOW/MEDIUM/HIGH matches, no daily cap.
 
+## Matching Quality
+- Smarter tokenization for tech names like `node.js`, `react-native`, `c++`, `c#`.
+- Synonym expansion and weighted scoring for more realistic match scores.
+
 ## Telegram Ingestion (Telethon)
 1. Get `TG_API_ID` and `TG_API_HASH` from my.telegram.org.
 2. Set `TG_SOURCE_CHATS` to a comma-separated list of chat usernames or IDs.
