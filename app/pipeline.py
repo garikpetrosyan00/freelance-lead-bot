@@ -51,8 +51,8 @@ async def _dispatch_lead(bot: Bot, lead: Lead) -> int:
             result = match_lead(skills, lead)
             if result.get("level") == "NONE":
                 continue
-            await send_lead(bot, user_id, lead, result)
-            notified += 1
+            if await send_lead(bot, user_id, lead, result):
+                notified += 1
         except Exception:
             logger.exception("Failed to notify user %s", user_id)
     return notified

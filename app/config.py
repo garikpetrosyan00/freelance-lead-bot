@@ -63,6 +63,21 @@ def get_tg_source_chats() -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
+def get_admin_user_ids() -> set[int]:
+    raw = os.getenv("ADMIN_USER_IDS", "")
+    if not raw.strip():
+        return set()
+    ids: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if not part.isdigit():
+            raise RuntimeError("ADMIN_USER_IDS must be a comma-separated list of integers")
+        ids.add(int(part))
+    return ids
+
+
 def enable_fake_ingestion() -> bool:
     return _get_env_bool("ENABLE_FAKE_INGESTION", False)
 

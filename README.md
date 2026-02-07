@@ -29,6 +29,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/unsubscribe`
 - `/status`
 - `/ping_lead`
+- `/plan`
+- `/upgrade`
+- `/set_plan FREE|PRO` (admin only)
 
 ## Data
 - SQLite database: `data/app.db`
@@ -36,6 +39,10 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 ## Notifications
 - Fake ingestion generates a test lead about every ~60 seconds.
 - Subscribed users receive a notification when their skills match a lead.
+
+## Plans (FREE vs PRO)
+- FREE: only MEDIUM/HIGH matches, daily cap of 5 notifications.
+- PRO: LOW/MEDIUM/HIGH matches, no daily cap.
 
 ## Telegram Ingestion (Telethon)
 1. Get `TG_API_ID` and `TG_API_HASH` from my.telegram.org.

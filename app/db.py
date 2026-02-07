@@ -18,6 +18,10 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def utc_day() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with _connect() as conn:
@@ -37,6 +41,27 @@ def init_db() -> None:
                 is_active INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_plan (
+                user_id INTEGER PRIMARY KEY,
+                plan TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                user_id INTEGER NOT NULL,
+                day TEXT NOT NULL,
+                notifications_sent INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, day)
             )
             """
         )
@@ -123,3 +148,64 @@ def list_subscribed_users() -> list[int]:
         ).fetchall()
 
     return [int(row[0]) for row in rows]
+
+
+def get_plan(user_id: int) -> str:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT plan FROM user_plan WHERE user_id = ?", (user_id,)
+        ).fetchone()
+    if not row:
+        return "FREE"
+    return str(row[0])
+
+
+def set_plan(user_id: int, plan: str) -> None:
+    plan = plan.upper().strip()
+    if plan not in {"FREE", "PRO"}:
+        raise ValueError("plan must be FREE or PRO")
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_plan (user_id, plan, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                plan=excluded.plan,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, plan, now, now),
+        )
+        conn.commit()
+
+
+def get_daily_usage(user_id: int, day: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT notifications_sent FROM daily_usage WHERE user_id = ? AND day = ?",
+            (user_id, day),
+        ).fetchone()
+    if not row:
+        return 0
+    return int(row[0])
+
+
+def increment_daily_usage(user_id: int, day: str, by: int = 1) -> int:
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_usage (user_id, day, notifications_sent, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, day) DO UPDATE SET
+                notifications_sent=daily_usage.notifications_sent + excluded.notifications_sent,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, day, int(by), now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT notifications_sent FROM daily_usage WHERE user_id = ? AND day = ?",
+            (user_id, day),
+        ).fetchone()
+    return int(row[0]) if row else 0
