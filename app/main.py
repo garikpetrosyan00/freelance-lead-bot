@@ -9,7 +9,7 @@ from aiogram import Bot, Dispatcher
 
 from app.config import load_config
 from app.db import init_db
-from app.handlers import skills_router, start_router
+from app.handlers import skills_router, start_router, test_lead_router
 
 
 def configure_logging() -> None:
@@ -30,6 +30,7 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(start_router)
     dp.include_router(skills_router)
+    dp.include_router(test_lead_router)
 
     logger.info("Starting bot polling")
     try:

@@ -24,6 +24,7 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/set_skills <skills...>`
   Example: `/set_skills python django react`
 - `/my_skills`
+- `/test_lead`
 
 ## Data
 - SQLite database: `data/app.db`
