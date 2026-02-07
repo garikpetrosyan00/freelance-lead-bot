@@ -12,13 +12,14 @@ from app.db import (
     get_daily_usage,
     get_last_sent_at,
     get_plan,
+    get_user_settings,
     has_seen_lead,
     increment_daily_usage,
     mark_seen_lead,
     set_last_sent_at,
     utc_day,
 )
-from app.gating import can_send_notification
+from app.gating import can_send_notification, effective_cap
 from app.leads import Lead
 
 
@@ -64,7 +65,11 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
     match_level = match.get("level", "NONE")
     day = utc_day()
     sent_today = get_daily_usage(user_id, day)
-    allowed, reason = can_send_notification(plan, match_level, sent_today)
+    min_level, user_cap = get_user_settings(user_id)
+    cap = effective_cap(plan, user_cap)
+    allowed, reason = can_send_notification(
+        plan, match_level, sent_today, min_level, cap
+    )
     if not allowed:
         logging.getLogger(__name__).info(
             "Notification blocked: user=%s reason=%s plan=%s level=%s",
@@ -82,11 +87,22 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
         "🔥 New lead found!",
         f"Title: {lead.title}",
         _format_line("Budget", lead.budget),
+        f"⭐ Score: {match.get('score', 0)}%",
         f"Match: {match.get('level', 'NONE')} ({match.get('score', 0)}%)",
         f"Matched skills: {matched_text}",
-        f"Source: {lead.source}",
-        _format_line("Link", lead.url),
+        "🧠 Why:",
     ]
+
+    details = match.get("details") or []
+    for detail in details[:3]:
+        lines.append(f"- {detail}")
+
+    lines.extend(
+        [
+            f"Source: {lead.source}",
+            _format_line("Link", lead.url),
+        ]
+    )
 
     text = "\n".join([line for line in lines if line])
     await bot.send_message(chat_id=user_id, text=text)

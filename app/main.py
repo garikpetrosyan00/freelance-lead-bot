@@ -16,6 +16,7 @@ from app.config import (
 from app.db import init_db
 from app.handlers import (
     plan_router,
+    settings_router,
     skills_router,
     start_router,
     subscription_router,
@@ -56,6 +57,7 @@ async def main() -> None:
     dp.include_router(test_lead_router)
     dp.include_router(subscription_router)
     dp.include_router(plan_router)
+    dp.include_router(settings_router)
 
     tasks: list[asyncio.Task] = []
 

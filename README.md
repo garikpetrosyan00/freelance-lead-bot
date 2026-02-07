@@ -32,6 +32,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/plan`
 - `/upgrade`
 - `/set_plan FREE|PRO` (admin only)
+- `/settings`
+- `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
+- `/set_daily_cap <N|unlimited>` (PRO only)
 
 ## Data
 - SQLite database: `data/app.db`
@@ -43,6 +46,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 ## Plans (FREE vs PRO)
 - FREE: only MEDIUM/HIGH matches, daily cap of 5 notifications.
 - PRO: LOW/MEDIUM/HIGH matches, no daily cap.
+
+## PRO Settings
+- PRO users can set a minimum match level and a custom daily cap.
 
 ## Matching Quality
 - Smarter tokenization for tech names like `node.js`, `react-native`, `c++`, `c#`.

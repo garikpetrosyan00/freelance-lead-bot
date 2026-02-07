@@ -113,9 +113,31 @@ def match_lead(user_skills: list[str], lead: Lead) -> Dict[str, object]:
                         details.append(f"Synonym match: {token} → {synonym}")
 
     if total_weight == 0:
-        score = 0
+        base_score = 0
     else:
-        score = round(100 * matched_weight / total_weight)
+        base_score = round(100 * matched_weight / total_weight)
+    base_score = max(0, min(100, base_score))
+
+    score = base_score
+    score_breakdown: List[str] = []
+
+    if lead.budget:
+        score += 10
+        score_breakdown.append("budget:+10")
+
+    text_blob = f"{lead.title} {lead.description}".lower()
+    if "urgent" in text_blob or "asap" in text_blob:
+        score += 5
+        score_breakdown.append("urgency:+5")
+
+    if len(lead.description) >= 250:
+        score += 5
+        score_breakdown.append("detail_length:+5")
+
+    if lead.url:
+        score += 3
+        score_breakdown.append("link:+3")
+
     score = max(0, min(100, score))
 
     if score == 0:
@@ -127,4 +149,10 @@ def match_lead(user_skills: list[str], lead: Lead) -> Dict[str, object]:
     else:
         level = "HIGH"
 
-    return {"matched": matched, "score": score, "level": level, "details": details}
+    return {
+        "matched": matched,
+        "score": score,
+        "level": level,
+        "details": details,
+        "score_breakdown": score_breakdown,
+    }

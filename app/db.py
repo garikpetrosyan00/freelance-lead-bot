@@ -83,6 +83,16 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                min_level TEXT NOT NULL,
+                daily_cap INTEGER,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
@@ -273,5 +283,57 @@ def mark_seen_lead(user_id: int, lead_hash: str) -> None:
             VALUES (?, ?, ?)
             """,
             (user_id, lead_hash, now),
+        )
+        conn.commit()
+
+
+def get_user_settings(user_id: int) -> tuple[str, int | None]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT min_level, daily_cap FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return "MEDIUM", None
+    min_level = str(row[0]).upper().strip() if row[0] else "MEDIUM"
+    daily_cap = row[1]
+    return min_level or "MEDIUM", int(daily_cap) if daily_cap is not None else None
+
+
+def set_user_min_level(user_id: int, min_level: str) -> None:
+    min_level = min_level.upper().strip()
+    if min_level not in {"LOW", "MEDIUM", "HIGH"}:
+        raise ValueError("min_level must be LOW, MEDIUM, or HIGH")
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_settings (user_id, min_level, daily_cap, updated_at)
+            VALUES (?, ?, NULL, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                min_level=excluded.min_level,
+                daily_cap=user_settings.daily_cap,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, min_level, now),
+        )
+        conn.commit()
+
+
+def set_user_daily_cap(user_id: int, daily_cap: int | None) -> None:
+    if daily_cap is not None and daily_cap <= 0:
+        raise ValueError("daily_cap must be a positive integer or None")
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_settings (user_id, min_level, daily_cap, updated_at)
+            VALUES (?, 'MEDIUM', ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                min_level=user_settings.min_level,
+                daily_cap=excluded.daily_cap,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, daily_cap, now),
         )
         conn.commit()
