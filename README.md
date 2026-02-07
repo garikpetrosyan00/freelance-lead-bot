@@ -25,6 +25,14 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
   Example: `/set_skills python django react`
 - `/my_skills`
 - `/test_lead`
+- `/subscribe`
+- `/unsubscribe`
+- `/status`
+- `/ping_lead`
 
 ## Data
 - SQLite database: `data/app.db`
+
+## Notifications
+- Fake ingestion generates a test lead about every ~60 seconds.
+- Subscribed users receive a notification when their skills match a lead.

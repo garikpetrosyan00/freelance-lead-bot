@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 
 from app.config import load_config
 from app.db import init_db
-from app.handlers import skills_router, start_router, test_lead_router
+from app.handlers import skills_router, start_router, subscription_router, test_lead_router
+from app.pipeline import run_fake_ingestion
 
 
 def configure_logging() -> None:
@@ -31,11 +33,17 @@ async def main() -> None:
     dp.include_router(start_router)
     dp.include_router(skills_router)
     dp.include_router(test_lead_router)
+    dp.include_router(subscription_router)
+
+    ingestion_task = asyncio.create_task(run_fake_ingestion(bot))
 
     logger.info("Starting bot polling")
     try:
         await dp.start_polling(bot)
     finally:
+        ingestion_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ingestion_task
         await bot.session.close()
         logger.info("Bot polling stopped")
 

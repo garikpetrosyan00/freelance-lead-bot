@@ -14,6 +14,10 @@ def _connect() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with _connect() as conn:
@@ -22,6 +26,16 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS user_prefs (
                 user_id INTEGER PRIMARY KEY,
                 skills TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                is_active INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
@@ -46,7 +60,7 @@ def _normalize_skills(raw_skills: Iterable[str]) -> List[str]:
 def set_skills(user_id: int, skills: list[str]) -> None:
     normalized = _normalize_skills(skills)
     skills_str = ", ".join(normalized)
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = _utc_now()
     with _connect() as conn:
         conn.execute(
             """
@@ -72,3 +86,40 @@ def get_skills(user_id: int) -> list[str]:
 
     skills_str = row[0] or ""
     return [skill.strip() for skill in skills_str.split(",") if skill.strip()]
+
+
+def set_subscription(user_id: int, is_active: bool) -> None:
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO subscriptions (user_id, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                is_active=excluded.is_active,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, int(is_active), now, now),
+        )
+        conn.commit()
+
+
+def is_subscribed(user_id: int) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT is_active FROM subscriptions WHERE user_id = ?", (user_id,)
+        ).fetchone()
+
+    if not row:
+        return False
+
+    return bool(row[0])
+
+
+def list_subscribed_users() -> list[int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT user_id FROM subscriptions WHERE is_active = 1"
+        ).fetchall()
+
+    return [int(row[0]) for row in rows]
