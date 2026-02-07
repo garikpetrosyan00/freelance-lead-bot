@@ -65,6 +65,24 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notify_state (
+                user_id INTEGER PRIMARY KEY,
+                last_sent_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lead_seen (
+                user_id INTEGER NOT NULL,
+                lead_hash TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, lead_hash)
+            )
+            """
+        )
         conn.commit()
 
 
@@ -157,7 +175,8 @@ def get_plan(user_id: int) -> str:
         ).fetchone()
     if not row:
         return "FREE"
-    return str(row[0])
+    plan = str(row[0]).upper().strip()
+    return plan or "FREE"
 
 
 def set_plan(user_id: int, plan: str) -> None:
@@ -209,3 +228,50 @@ def increment_daily_usage(user_id: int, day: str, by: int = 1) -> int:
             (user_id, day),
         ).fetchone()
     return int(row[0]) if row else 0
+
+
+def get_last_sent_at(user_id: int) -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT last_sent_at FROM notify_state WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return str(row[0])
+
+
+def set_last_sent_at(user_id: int, ts_iso: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO notify_state (user_id, last_sent_at)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_sent_at=excluded.last_sent_at
+            """,
+            (user_id, ts_iso),
+        )
+        conn.commit()
+
+
+def has_seen_lead(user_id: int, lead_hash: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM lead_seen WHERE user_id = ? AND lead_hash = ?",
+            (user_id, lead_hash),
+        ).fetchone()
+    return row is not None
+
+
+def mark_seen_lead(user_id: int, lead_hash: str) -> None:
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO lead_seen (user_id, lead_hash, first_seen_at)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, lead_hash, now),
+        )
+        conn.commit()

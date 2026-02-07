@@ -15,6 +15,7 @@ from telethon.tl.custom.message import Message
 
 from app.config import get_tg_api_hash, get_tg_api_id, get_tg_source_chats
 from app.db import get_skills, list_subscribed_users
+from app.filters import is_low_quality
 from app.leads import Lead
 from app.matching import match_lead
 from app.notify import send_lead
@@ -121,6 +122,16 @@ async def run_telegram_listener(bot: Bot) -> None:
 
         text = message.raw_text.strip()
         if not text:
+            return
+
+        blocked, reason = is_low_quality(text)
+        if blocked:
+            logger.info(
+                "Telegram lead skipped: reason=%s chat=%s message=%s",
+                reason,
+                message.chat_id,
+                message.id,
+            )
             return
 
         lead = _build_lead(text, message)

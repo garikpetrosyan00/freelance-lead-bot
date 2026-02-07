@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+from datetime import datetime, timezone
 
 from aiogram import Bot
 
-from app.db import get_daily_usage, get_plan, increment_daily_usage, utc_day
+from app.db import (
+    get_daily_usage,
+    get_last_sent_at,
+    get_plan,
+    has_seen_lead,
+    increment_daily_usage,
+    mark_seen_lead,
+    set_last_sent_at,
+    utc_day,
+)
 from app.gating import can_send_notification
 from app.leads import Lead
 
@@ -17,8 +28,39 @@ def _format_line(label: str, value: str | None) -> str | None:
     return f"{label}: {value}"
 
 
+def _lead_hash(lead: Lead) -> str:
+    fingerprint = f"{lead.title}\n{lead.description[:400]}"
+    normalized = " ".join(fingerprint.lower().split())
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+
 async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
+    lead_hash = _lead_hash(lead)
+    if has_seen_lead(user_id, lead_hash):
+        logging.getLogger(__name__).info(
+            "Notification blocked: user=%s reason=duplicate", user_id
+        )
+        return False
+
     plan = get_plan(user_id)
+    now = datetime.now(timezone.utc)
+    last_sent_at = get_last_sent_at(user_id)
+    cooldown_seconds = 30 if plan == "PRO" else 120
+    if last_sent_at:
+        try:
+            last_dt = datetime.fromisoformat(last_sent_at)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            if (now - last_dt).total_seconds() < cooldown_seconds:
+                logging.getLogger(__name__).info(
+                    "Notification blocked: user=%s reason=cooldown plan=%s",
+                    user_id,
+                    plan,
+                )
+                return False
+        except ValueError:
+            pass
+
     match_level = match.get("level", "NONE")
     day = utc_day()
     sent_today = get_daily_usage(user_id, day)
@@ -49,4 +91,6 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
     text = "\n".join([line for line in lines if line])
     await bot.send_message(chat_id=user_id, text=text)
     increment_daily_usage(user_id, day, by=1)
+    set_last_sent_at(user_id, now.isoformat())
+    mark_seen_lead(user_id, lead_hash)
     return True
