@@ -36,3 +36,14 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 ## Notifications
 - Fake ingestion generates a test lead about every ~60 seconds.
 - Subscribed users receive a notification when their skills match a lead.
+
+## Telegram Ingestion (Telethon)
+1. Get `TG_API_ID` and `TG_API_HASH` from my.telegram.org.
+2. Set `TG_SOURCE_CHATS` to a comma-separated list of chat usernames or IDs.
+   Example: `somegroup,anothergroup` or `-100123..., -100456...`
+3. On first run, Telethon will prompt in the console for your phone and login code.
+4. A session file is stored at `data/telethon.session` (do not commit it).
+
+## Ingestion Toggles
+- `ENABLE_FAKE_INGESTION=0` (default)
+- `ENABLE_TELEGRAM_INGESTION=1` (default)

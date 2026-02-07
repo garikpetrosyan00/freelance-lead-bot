@@ -5,5 +5,7 @@ __pycache__/
 .venv/
 venv/
 *.db
+*.session
+*.session-journal
 .idea/
 .vscode/
