@@ -84,3 +84,13 @@ def enable_fake_ingestion() -> bool:
 
 def enable_telegram_ingestion() -> bool:
     return _get_env_bool("ENABLE_TELEGRAM_INGESTION", True)
+
+
+def get_upgrade_contact() -> str:
+    contact = os.getenv("UPGRADE_CONTACT", "@your_username").strip()
+    return contact or "@your_username"
+
+
+def get_payment_link() -> str | None:
+    payment_link = os.getenv("PAYMENT_LINK", "").strip()
+    return payment_link or None

@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.config import get_admin_user_ids
+from app.config import get_admin_user_ids, get_payment_link, get_upgrade_contact
 from app.db import get_daily_usage, get_plan, set_plan, utc_day
 from app.gating import FREE_DAILY_CAP, allowed_match_levels
 
@@ -33,9 +33,23 @@ async def handle_plan(message: Message) -> None:
 
 @router.message(Command("upgrade"))
 async def handle_upgrade(message: Message) -> None:
-    await message.answer(
-        "To upgrade to PRO, contact @your_username or use payment link (coming soon)."
-    )
+    contact = get_upgrade_contact()
+    payment_link = get_payment_link()
+    lines = [
+        "PRO benefits:",
+        "- LOW alerts",
+        "- Custom min level",
+        "- Custom daily cap",
+        "- Faster cooldown",
+        "- Unlimited cap (if configured)",
+    ]
+    if payment_link:
+        lines.append(f"Pay here: {payment_link}")
+    else:
+        lines.append("Payment link coming soon.")
+    lines.append(f"After payment, message {contact} with your /my_id.")
+    lines.append("Daily cap is based on UTC day.")
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("set_plan"))

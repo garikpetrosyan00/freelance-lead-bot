@@ -31,6 +31,8 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/ping_lead`
 - `/plan`
 - `/upgrade`
+- `/my_id`
+- `/request_pro`
 - `/set_plan FREE|PRO` (admin only)
 - `/settings`
 - `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
@@ -49,6 +51,12 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 
 ## PRO Settings
 - PRO users can set a minimum match level and a custom daily cap.
+
+## Upgrading to PRO (Manual MVP)
+1. Run `/upgrade` to get the payment link/contact.
+2. Pay.
+3. Run `/my_id` and send your ID to the admin.
+4. Admin runs `/set_plan PRO <user_id>`.
 
 ## Matching Quality
 - Smarter tokenization for tech names like `node.js`, `react-native`, `c++`, `c#`.

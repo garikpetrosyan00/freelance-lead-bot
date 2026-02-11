@@ -15,12 +15,14 @@ from app.config import (
 )
 from app.db import init_db
 from app.handlers import (
+    my_id_router,
     plan_router,
     settings_router,
     skills_router,
     start_router,
     subscription_router,
     test_lead_router,
+    upgrade_request_router,
 )
 from app.ingestion.telegram_listener import run_telegram_listener
 from app.pipeline import run_fake_ingestion
@@ -58,6 +60,8 @@ async def main() -> None:
     dp.include_router(subscription_router)
     dp.include_router(plan_router)
     dp.include_router(settings_router)
+    dp.include_router(my_id_router)
+    dp.include_router(upgrade_request_router)
 
     tasks: list[asyncio.Task] = []
 
