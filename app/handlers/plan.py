@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.config import get_admin_user_ids, get_payment_link, get_upgrade_contact
+from app.config import get_payment_link, get_upgrade_contact, is_admin
 from app.db import get_daily_usage, get_plan, set_plan, utc_day
 from app.gating import FREE_DAILY_CAP, allowed_match_levels
 
@@ -54,9 +54,8 @@ async def handle_upgrade(message: Message) -> None:
 
 @router.message(Command("set_plan"))
 async def handle_set_plan(message: Message) -> None:
-    admin_ids = get_admin_user_ids()
-    if message.from_user.id not in admin_ids:
-        await message.answer("Not authorized.")
+    if not is_admin(message.from_user.id):
+        await message.answer("Unauthorized")
         return
 
     parts = (message.text or "").split()

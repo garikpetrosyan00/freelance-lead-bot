@@ -78,6 +78,10 @@ def get_admin_user_ids() -> set[int]:
     return ids
 
 
+def is_admin(user_id: int) -> bool:
+    return user_id in get_admin_user_ids()
+
+
 def enable_fake_ingestion() -> bool:
     return _get_env_bool("ENABLE_FAKE_INGESTION", False)
 

@@ -19,6 +19,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 ## Run
 - `python -m app.main`
 
+## Run Smoke Test
+- `python -m app.scripts.smoke_pro_flow`
+
 ## Commands
 - `/start`
 - `/set_skills <skills...>`
@@ -34,6 +37,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/my_id`
 - `/request_pro`
 - `/set_plan FREE|PRO` (admin only)
+- `/pro_requests` (admin only)
+- `/approve_pro <id>` (admin only)
+- `/reject_pro <id> [reason]` (admin only)
 - `/settings`
 - `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
 - `/set_daily_cap <N|unlimited>` (PRO only)
@@ -52,11 +58,21 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 ## PRO Settings
 - PRO users can set a minimum match level and a custom daily cap.
 
-## Upgrading to PRO (Manual MVP)
+## Upgrading to PRO (Admin Approval Flow)
 1. Run `/upgrade` to get the payment link/contact.
 2. Pay.
-3. Run `/my_id` and send your ID to the admin.
-4. Admin runs `/set_plan PRO <user_id>`.
+3. Run `/request_pro` to create a pending request.
+4. Admin reviews pending requests with `/pro_requests`.
+5. Admin approves with `/approve_pro <id>` or rejects with `/reject_pro <id> [reason]`.
+
+## Manual Test Checklist (Task 5B Hardening)
+- Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.
+- Approve a pending request via `/approve_pro <id>` and confirm `/plan` and `/settings` reflect `PRO` immediately.
+- Validate command parsing with bot mention:
+  - `/approve_pro@YourBot 12`
+  - `/reject_pro@YourBot 12 reason`
+- Validate admin authorization:
+  - Non-admin calling `/pro_requests`, `/approve_pro`, or `/reject_pro` must receive `Unauthorized`.
 
 ## Matching Quality
 - Smarter tokenization for tech names like `node.js`, `react-native`, `c++`, `c#`.

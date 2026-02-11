@@ -5,13 +5,23 @@ from __future__ import annotations
 import os
 import sqlite3
 from datetime import datetime, timezone
-from typing import Iterable, List
+from typing import Any, Iterable, List
 
 DB_PATH = os.path.join("data", "app.db")
+DB_URI = False
 
 
 def _connect() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(DB_PATH, uri=DB_URI)
+
+
+def configure_db(path: str, uri: bool | None = None) -> None:
+    global DB_PATH, DB_URI
+    DB_PATH = path
+    if uri is None:
+        DB_URI = path.startswith("file:")
+    else:
+        DB_URI = bool(uri)
 
 
 def _utc_now() -> str:
@@ -23,7 +33,9 @@ def utc_day() -> str:
 
 
 def init_db() -> None:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not DB_URI and DB_PATH != ":memory:":
+        os.makedirs(db_dir, exist_ok=True)
     with _connect() as conn:
         conn.execute(
             """
@@ -93,6 +105,44 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upgrade_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                admin_id INTEGER,
+                admin_note TEXT,
+                decided_at TEXT,
+                user_settings_json TEXT,
+                paid INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
+            ON upgrade_requests(status, created_at)
+            """
+        )
+        try:
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_upgrade_requests_unique_pending
+                ON upgrade_requests(user_id)
+                WHERE status = 'pending'
+                """
+            )
+        except sqlite3.OperationalError:
+            # Older SQLite builds may not support partial indexes.
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_upgrade_requests_user_status
+                ON upgrade_requests(user_id, status)
+                """
+            )
         conn.commit()
 
 
@@ -206,6 +256,249 @@ def set_plan(user_id: int, plan: str) -> None:
             (user_id, plan, now, now),
         )
         conn.commit()
+
+
+def get_user_plan(user_id: int) -> str:
+    return get_plan(user_id)
+
+
+def mark_user_pro(
+    user_id: int,
+    enabled: bool,
+    activated_at_iso: str,
+    plan: str = "PRO",
+) -> None:
+    target_plan = plan.upper().strip() if enabled else "FREE"
+    if target_plan not in {"FREE", "PRO"}:
+        raise ValueError("plan must be FREE or PRO")
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_plan (user_id, plan, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                plan=excluded.plan,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, target_plan, activated_at_iso, activated_at_iso),
+        )
+        conn.commit()
+
+
+def _upgrade_request_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": int(row[0]),
+        "user_id": int(row[1]),
+        "username": row[2],
+        "created_at": str(row[3]),
+        "status": str(row[4]),
+        "admin_id": int(row[5]) if row[5] is not None else None,
+        "admin_note": row[6],
+        "decided_at": row[7],
+        "user_settings_json": row[8],
+        "paid": int(row[9]),
+    }
+
+
+def create_upgrade_request(
+    user_id: int,
+    username: str | None,
+    settings_snapshot_json: str | None,
+    paid: int = 0,
+) -> int:
+    request_id, _ = create_upgrade_request_with_state(
+        user_id=user_id,
+        username=username,
+        settings_snapshot_json=settings_snapshot_json,
+        paid=paid,
+    )
+    return request_id
+
+
+def create_upgrade_request_with_state(
+    user_id: int,
+    username: str | None,
+    settings_snapshot_json: str | None,
+    paid: int = 0,
+) -> tuple[int, bool]:
+    with _connect() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM upgrade_requests
+                WHERE user_id = ? AND status = 'pending'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if existing:
+                conn.commit()
+                return int(existing[0]), False
+
+            now = _utc_now()
+            conn.execute(
+                """
+                INSERT INTO upgrade_requests (
+                    user_id,
+                    username,
+                    created_at,
+                    status,
+                    admin_id,
+                    admin_note,
+                    decided_at,
+                    user_settings_json,
+                    paid
+                )
+                VALUES (?, ?, ?, 'pending', NULL, NULL, NULL, ?, ?)
+                """,
+                (user_id, username, now, settings_snapshot_json, int(bool(paid))),
+            )
+            row = conn.execute("SELECT last_insert_rowid()").fetchone()
+            conn.commit()
+            return (int(row[0]) if row else 0), True
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            # Handles race with unique pending index.
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM upgrade_requests
+                WHERE user_id = ? AND status = 'pending'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if existing:
+                return int(existing[0]), False
+            raise
+
+
+def get_pending_upgrade_request_id(user_id: int) -> int | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM upgrade_requests
+            WHERE user_id = ? AND status = 'pending'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return int(row[0])
+
+
+def list_pending_upgrade_requests(limit: int = 50) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 200))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                username,
+                created_at,
+                status,
+                admin_id,
+                admin_note,
+                decided_at,
+                user_settings_json,
+                paid
+            FROM upgrade_requests
+            WHERE status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [_upgrade_request_row_to_dict(row) for row in rows]
+
+
+def get_upgrade_request_by_id(request_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                username,
+                created_at,
+                status,
+                admin_id,
+                admin_note,
+                decided_at,
+                user_settings_json,
+                paid
+            FROM upgrade_requests
+            WHERE id = ?
+            """,
+            (request_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return _upgrade_request_row_to_dict(row)
+
+
+def set_upgrade_request_status(
+    request_id: int,
+    status: str,
+    admin_id: int,
+    admin_note: str | None,
+    decided_at_iso: str,
+) -> None:
+    normalized = status.lower().strip()
+    if normalized not in {"pending", "approved", "rejected"}:
+        raise ValueError("status must be pending, approved, or rejected")
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE upgrade_requests
+            SET
+                status = ?,
+                admin_id = ?,
+                admin_note = ?,
+                decided_at = ?
+            WHERE id = ?
+            """,
+            (normalized, admin_id, admin_note, decided_at_iso, request_id),
+        )
+        conn.commit()
+
+
+def decide_upgrade_request(
+    request_id: int,
+    new_status: str,
+    admin_id: int,
+    admin_note: str | None,
+    decided_at_iso: str,
+) -> bool:
+    normalized = new_status.lower().strip()
+    if normalized not in {"approved", "rejected"}:
+        raise ValueError("new_status must be approved or rejected")
+
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE upgrade_requests
+            SET
+                status = ?,
+                admin_id = ?,
+                admin_note = ?,
+                decided_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (normalized, admin_id, admin_note, decided_at_iso, request_id),
+        )
+        conn.commit()
+        return int(cursor.rowcount) > 0
 
 
 def get_daily_usage(user_id: int, day: str) -> int:
