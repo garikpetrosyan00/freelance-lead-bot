@@ -98,3 +98,57 @@ def get_upgrade_contact() -> str:
 def get_payment_link() -> str | None:
     payment_link = os.getenv("PAYMENT_LINK", "").strip()
     return payment_link or None
+
+
+def get_public_base_url() -> str:
+    return os.getenv("PUBLIC_BASE_URL", "http://localhost:8080").strip().rstrip("/")
+
+
+def get_webhook_host() -> str:
+    host = os.getenv("WEBHOOK_HOST", "0.0.0.0").strip()
+    return host or "0.0.0.0"
+
+
+def get_webhook_port() -> int:
+    return _get_env_int("WEBHOOK_PORT", 8080)
+
+
+def get_stripe_secret_key() -> str | None:
+    value = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    return value or None
+
+
+def get_stripe_webhook_secret() -> str | None:
+    value = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+    return value or None
+
+
+def get_stripe_price_id() -> str | None:
+    value = os.getenv("STRIPE_PRICE_ID", "").strip()
+    return value or None
+
+
+def get_stripe_mode() -> str:
+    value = os.getenv("STRIPE_MODE", "subscription").strip().lower()
+    if value not in {"subscription", "payment"}:
+        raise RuntimeError("STRIPE_MODE must be 'subscription' or 'payment'")
+    return value
+
+
+def get_stripe_currency() -> str:
+    value = os.getenv("STRIPE_CURRENCY", "usd").strip().lower()
+    return value or "usd"
+
+
+def get_stripe_success_path() -> str:
+    value = os.getenv("STRIPE_SUCCESS_PATH", "/stripe/success").strip()
+    if not value.startswith("/"):
+        value = f"/{value}"
+    return value
+
+
+def get_stripe_cancel_path() -> str:
+    value = os.getenv("STRIPE_CANCEL_PATH", "/stripe/cancel").strip()
+    if not value.startswith("/"):
+        value = f"/{value}"
+    return value

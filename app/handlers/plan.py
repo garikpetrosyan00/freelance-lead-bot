@@ -27,7 +27,7 @@ async def handle_plan(message: Message) -> None:
     if plan == "FREE":
         lines.append(f"Daily cap (UTC): {FREE_DAILY_CAP}")
     lines.append(f"Used today: {used}")
-    lines.append("Tip: /upgrade to get LOW alerts + unlimited")
+    lines.append("Tip: /buy_pro for Stripe checkout, or /upgrade for manual flow")
     await message.answer("\n".join(lines))
 
 

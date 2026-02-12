@@ -123,8 +123,68 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS processed_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                event_id TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                request_id INTEGER,
+                checkout_session_id TEXT UNIQUE,
+                payment_intent_id TEXT,
+                subscription_id TEXT,
+                customer_id TEXT,
+                amount_total INTEGER,
+                currency TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stripe_subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                provider TEXT NOT NULL,
+                subscription_id TEXT UNIQUE,
+                customer_id TEXT,
+                status TEXT NOT NULL,
+                current_period_end TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
             ON upgrade_requests(status, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_user_status
+            ON payments(user_id, status)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_subscription_id
+            ON payments(subscription_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_payments_checkout_session_id
+            ON payments(checkout_session_id)
             """
         )
         try:
@@ -499,6 +559,261 @@ def decide_upgrade_request(
         )
         conn.commit()
         return int(cursor.rowcount) > 0
+
+
+def attach_payment_to_upgrade_request(request_id: int, paid: int = 1) -> bool:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE upgrade_requests
+            SET paid = ?
+            WHERE id = ?
+            """,
+            (int(bool(paid)), request_id),
+        )
+        conn.commit()
+        return int(cursor.rowcount) > 0
+
+
+def mark_event_processed(provider: str, event_id: str) -> bool:
+    now = _utc_now()
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO processed_events (provider, event_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (provider, event_id, now),
+            )
+            conn.commit()
+            return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def unmark_event_processed(provider: str, event_id: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "DELETE FROM processed_events WHERE provider = ? AND event_id = ?",
+            (provider, event_id),
+        )
+        conn.commit()
+
+
+def upsert_payment_from_checkout(session_obj: dict[str, Any]) -> None:
+    checkout_session_id = str(session_obj.get("id") or "").strip()
+    if not checkout_session_id:
+        raise ValueError("checkout session id is required")
+
+    metadata = session_obj.get("metadata") or {}
+    user_id_raw = metadata.get("user_id")
+    if user_id_raw is None:
+        raise ValueError("metadata.user_id is required")
+    user_id = int(user_id_raw)
+
+    request_id_raw = metadata.get("request_id")
+    request_id = int(request_id_raw) if str(request_id_raw or "").isdigit() else None
+
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO payments (
+                provider,
+                user_id,
+                request_id,
+                checkout_session_id,
+                payment_intent_id,
+                subscription_id,
+                customer_id,
+                amount_total,
+                currency,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)
+            ON CONFLICT(checkout_session_id) DO UPDATE SET
+                user_id=excluded.user_id,
+                request_id=COALESCE(excluded.request_id, payments.request_id),
+                payment_intent_id=COALESCE(excluded.payment_intent_id, payments.payment_intent_id),
+                subscription_id=COALESCE(excluded.subscription_id, payments.subscription_id),
+                customer_id=COALESCE(excluded.customer_id, payments.customer_id),
+                amount_total=COALESCE(excluded.amount_total, payments.amount_total),
+                currency=COALESCE(excluded.currency, payments.currency),
+                updated_at=excluded.updated_at
+            """,
+            (
+                "stripe",
+                user_id,
+                request_id,
+                checkout_session_id,
+                str(session_obj.get("payment_intent") or "") or None,
+                str(session_obj.get("subscription") or "") or None,
+                str(session_obj.get("customer") or "") or None,
+                int(session_obj.get("amount_total")) if session_obj.get("amount_total") is not None else None,
+                str(session_obj.get("currency") or "") or None,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def mark_payment_paid_by_session(
+    session_id: str,
+    *,
+    payment_intent_id: str | None = None,
+    subscription_id: str | None = None,
+    customer_id: str | None = None,
+    amount_total: int | None = None,
+    currency: str | None = None,
+) -> bool:
+    now = _utc_now()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET
+                payment_intent_id = COALESCE(?, payment_intent_id),
+                subscription_id = COALESCE(?, subscription_id),
+                customer_id = COALESCE(?, customer_id),
+                amount_total = COALESCE(?, amount_total),
+                currency = COALESCE(?, currency),
+                status = 'paid',
+                updated_at = ?
+            WHERE checkout_session_id = ?
+            """,
+            (
+                payment_intent_id,
+                subscription_id,
+                customer_id,
+                amount_total,
+                currency,
+                now,
+                session_id,
+            ),
+        )
+        conn.commit()
+        return int(cursor.rowcount) > 0
+
+
+def mark_payment_paid_by_subscription_id(
+    subscription_id: str,
+    *,
+    amount_total: int | None = None,
+    currency: str | None = None,
+    status: str = "paid",
+) -> bool:
+    now = _utc_now()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET
+                amount_total = COALESCE(?, amount_total),
+                currency = COALESCE(?, currency),
+                status = ?,
+                updated_at = ?
+            WHERE subscription_id = ?
+            """,
+            (amount_total, currency, status, now, subscription_id),
+        )
+        conn.commit()
+        return int(cursor.rowcount) > 0
+
+
+def update_payment_status_by_subscription_id(subscription_id: str, status: str) -> bool:
+    now = _utc_now()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE payments
+            SET status = ?, updated_at = ?
+            WHERE subscription_id = ?
+            """,
+            (status, now, subscription_id),
+        )
+        conn.commit()
+        return int(cursor.rowcount) > 0
+
+
+def get_payment_user_id_by_subscription_id(subscription_id: str) -> int | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM payments WHERE subscription_id = ? ORDER BY id DESC LIMIT 1",
+            (subscription_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return int(row[0])
+
+
+def upsert_stripe_subscription(
+    user_id: int,
+    subscription_id: str,
+    customer_id: str | None,
+    status: str,
+    current_period_end: str | None,
+) -> None:
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO stripe_subscriptions (
+                user_id,
+                provider,
+                subscription_id,
+                customer_id,
+                status,
+                current_period_end,
+                updated_at
+            )
+            VALUES (?, 'stripe', ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                subscription_id=excluded.subscription_id,
+                customer_id=COALESCE(excluded.customer_id, stripe_subscriptions.customer_id),
+                status=excluded.status,
+                current_period_end=excluded.current_period_end,
+                updated_at=excluded.updated_at
+            """,
+            (
+                user_id,
+                subscription_id,
+                customer_id,
+                status,
+                current_period_end,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def get_subscription_user_id(subscription_id: str) -> int | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT user_id
+            FROM stripe_subscriptions
+            WHERE subscription_id = ?
+            LIMIT 1
+            """,
+            (subscription_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return int(row[0])
+
+
+def activate_pro_for_user(user_id: int, reason: str, activated_at_iso: str) -> None:
+    _ = reason
+    mark_user_pro(user_id=user_id, enabled=True, activated_at_iso=activated_at_iso, plan="PRO")
+
+
+def downgrade_user_to_free(user_id: int, reason: str, updated_at_iso: str) -> None:
+    _ = reason
+    mark_user_pro(user_id=user_id, enabled=False, activated_at_iso=updated_at_iso, plan="FREE")
 
 
 def get_daily_usage(user_id: int, day: str) -> int:

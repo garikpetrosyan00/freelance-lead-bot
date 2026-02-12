@@ -7,6 +7,7 @@ from .test_lead import router as test_lead_router
 from .plan import router as plan_router
 from .settings import router as settings_router
 from .my_id import router as my_id_router
+from .buy_pro import router as buy_pro_router
 from .upgrade_request import router as upgrade_request_router
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "plan_router",
     "settings_router",
     "my_id_router",
+    "buy_pro_router",
     "upgrade_request_router",
 ]

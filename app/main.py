@@ -15,6 +15,7 @@ from app.config import (
 )
 from app.db import init_db
 from app.handlers import (
+    buy_pro_router,
     my_id_router,
     plan_router,
     settings_router,
@@ -26,6 +27,7 @@ from app.handlers import (
 )
 from app.ingestion.telegram_listener import run_telegram_listener
 from app.pipeline import run_fake_ingestion
+from app.webhooks import is_stripe_webhook_enabled, run_stripe_webhook_server
 
 
 def configure_logging() -> None:
@@ -61,6 +63,7 @@ async def main() -> None:
     dp.include_router(plan_router)
     dp.include_router(settings_router)
     dp.include_router(my_id_router)
+    dp.include_router(buy_pro_router)
     dp.include_router(upgrade_request_router)
 
     tasks: list[asyncio.Task] = []
@@ -74,6 +77,41 @@ async def main() -> None:
         telethon_task.add_done_callback(_log_task_failure)
         tasks.append(telethon_task)
         logger.info("Telegram ingestion enabled")
+
+    stripe_webhook_enabled, _ = is_stripe_webhook_enabled()
+    webhook_ready: asyncio.Event | None = asyncio.Event() if stripe_webhook_enabled else None
+    webhook_task = asyncio.create_task(run_stripe_webhook_server(bot, ready=webhook_ready))
+    webhook_task.add_done_callback(_log_task_failure)
+    tasks.append(webhook_task)
+    if stripe_webhook_enabled:
+        ready_wait_task = asyncio.create_task(webhook_ready.wait())
+        done, _ = await asyncio.wait(
+            {ready_wait_task, webhook_task},
+            timeout=5.0,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        started = ready_wait_task in done and webhook_ready.is_set()
+        if not started:
+            if webhook_task in done:
+                try:
+                    webhook_task.result()
+                except BaseException as exc:
+                    logger.exception("Stripe webhook failed to start - aborting", exc_info=exc)
+            else:
+                logger.error("Stripe webhook failed to start - aborting")
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with suppress(BaseException):
+                    await task
+            ready_wait_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await ready_wait_task
+            await bot.session.close()
+            raise SystemExit(1)
+        ready_wait_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ready_wait_task
 
     logger.info("Starting bot polling")
     try:

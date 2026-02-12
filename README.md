@@ -34,6 +34,7 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/ping_lead`
 - `/plan`
 - `/upgrade`
+- `/buy_pro`
 - `/my_id`
 - `/request_pro`
 - `/set_plan FREE|PRO` (admin only)
@@ -65,6 +66,14 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 4. Admin reviews pending requests with `/pro_requests`.
 5. Admin approves with `/approve_pro <id>` or rejects with `/reject_pro <id> [reason]`.
 
+## Stripe Auto-Activation Flow (Task 6)
+1. User runs `/buy_pro`.
+2. Bot creates a Stripe Checkout Session and returns the hosted payment URL.
+3. Stripe sends webhook events to `POST /webhooks/stripe`.
+4. On successful payment event, bot auto-activates `PRO`, marks payment/request state in SQLite, and notifies the user in Telegram.
+5. Policy implemented for failures/cancellation:
+   - `customer.subscription.deleted` and `invoice.payment_failed` downgrade to `FREE`.
+
 ## Manual Test Checklist (Task 5B Hardening)
 - Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.
 - Approve a pending request via `/approve_pro <id>` and confirm `/plan` and `/settings` reflect `PRO` immediately.
@@ -73,6 +82,47 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
   - `/reject_pro@YourBot 12 reason`
 - Validate admin authorization:
   - Non-admin calling `/pro_requests`, `/approve_pro`, or `/reject_pro` must receive `Unauthorized`.
+
+## Stripe Configuration
+Set these in `.env`:
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `STRIPE_PRICE_ID`
+- `PUBLIC_BASE_URL` (example: `https://your-domain.example`)
+
+Optional:
+- `STRIPE_MODE=subscription` (default) or `payment`
+- `STRIPE_CURRENCY=usd`
+- `STRIPE_SUCCESS_PATH=/stripe/success`
+- `STRIPE_CANCEL_PATH=/stripe/cancel`
+- `WEBHOOK_HOST=0.0.0.0`
+- `WEBHOOK_PORT=8080`
+
+If Stripe env vars are missing, bot still starts normally; `/buy_pro` returns a friendly unavailable message.
+
+## Run Stripe Webhook Locally (ngrok)
+1. Start bot:
+   - `python -m app.main`
+2. Expose local webhook port:
+   - `ngrok http 8080`
+3. Set `PUBLIC_BASE_URL` to your ngrok HTTPS URL.
+4. In Stripe Dashboard, create webhook endpoint:
+   - `https://<your-ngrok-domain>/webhooks/stripe`
+5. Subscribe at least to:
+   - `checkout.session.completed`
+   - `invoice.paid`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.payment_failed`
+6. Copy signing secret into `.env` as `STRIPE_WEBHOOK_SECRET`.
+
+## Manual Test Checklist (Stripe)
+1. Run `/buy_pro` and complete checkout with Stripe test card.
+2. Confirm user receives Telegram message: payment received and PRO activated.
+3. Confirm `/plan` shows `PRO`.
+4. Confirm `upgrade_requests.paid=1` and request auto-approved when pending exists.
+5. Replay same Stripe event and confirm idempotency (no duplicate activation side effects).
+6. Trigger `invoice.payment_failed` or `customer.subscription.deleted` in Stripe test tools and confirm downgrade to `FREE`.
 
 ## Matching Quality
 - Smarter tokenization for tech names like `node.js`, `react-native`, `c++`, `c#`.
