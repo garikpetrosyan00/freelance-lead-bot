@@ -806,6 +806,150 @@ def get_subscription_user_id(subscription_id: str) -> int | None:
     return int(row[0])
 
 
+def _payment_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": int(row[0]),
+        "provider": str(row[1]),
+        "user_id": int(row[2]),
+        "request_id": int(row[3]) if row[3] is not None else None,
+        "checkout_session_id": row[4],
+        "payment_intent_id": row[5],
+        "subscription_id": row[6],
+        "customer_id": row[7],
+        "amount_total": int(row[8]) if row[8] is not None else None,
+        "currency": row[9],
+        "status": str(row[10]),
+        "created_at": str(row[11]),
+        "updated_at": str(row[12]),
+    }
+
+
+def get_latest_payment_for_user(user_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                id,
+                provider,
+                user_id,
+                request_id,
+                checkout_session_id,
+                payment_intent_id,
+                subscription_id,
+                customer_id,
+                amount_total,
+                currency,
+                status,
+                created_at,
+                updated_at
+            FROM payments
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return _payment_row_to_dict(row)
+
+
+def list_recent_payments(limit: int = 20) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 200))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                provider,
+                user_id,
+                request_id,
+                checkout_session_id,
+                payment_intent_id,
+                subscription_id,
+                customer_id,
+                amount_total,
+                currency,
+                status,
+                created_at,
+                updated_at
+            FROM payments
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [_payment_row_to_dict(row) for row in rows]
+
+
+def get_stripe_subscription_for_user(user_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                user_id,
+                provider,
+                subscription_id,
+                customer_id,
+                status,
+                current_period_end,
+                updated_at
+            FROM stripe_subscriptions
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "user_id": int(row[0]),
+        "provider": str(row[1]),
+        "subscription_id": row[2],
+        "customer_id": row[3],
+        "status": str(row[4]),
+        "current_period_end": row[5],
+        "updated_at": str(row[6]),
+    }
+
+
+def list_subscriptions_by_status(status: str, limit: int = 20) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 200))
+    normalized = status.strip().lower()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                user_id,
+                provider,
+                subscription_id,
+                customer_id,
+                status,
+                current_period_end,
+                updated_at
+            FROM stripe_subscriptions
+            WHERE status = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (normalized, safe_limit),
+        ).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append(
+            {
+                "user_id": int(row[0]),
+                "provider": str(row[1]),
+                "subscription_id": row[2],
+                "customer_id": row[3],
+                "status": str(row[4]),
+                "current_period_end": row[5],
+                "updated_at": str(row[6]),
+            }
+        )
+    return result
+
+
 def activate_pro_for_user(user_id: int, reason: str, activated_at_iso: str) -> None:
     _ = reason
     mark_user_pro(user_id=user_id, enabled=True, activated_at_iso=activated_at_iso, plan="PRO")

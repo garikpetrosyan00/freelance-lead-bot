@@ -35,12 +35,16 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/plan`
 - `/upgrade`
 - `/buy_pro`
+- `/payment_status`
 - `/my_id`
 - `/request_pro`
 - `/set_plan FREE|PRO` (admin only)
 - `/pro_requests` (admin only)
 - `/approve_pro <id>` (admin only)
 - `/reject_pro <id> [reason]` (admin only)
+- `/payments_recent [limit]` (admin only)
+- `/subs_past_due [limit]` (admin only)
+- `/force_sync_user <user_id>` (admin only)
 - `/settings`
 - `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
 - `/set_daily_cap <N|unlimited>` (PRO only)
@@ -73,6 +77,15 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 4. On successful payment event, bot auto-activates `PRO`, marks payment/request state in SQLite, and notifies the user in Telegram.
 5. Policy implemented for failures/cancellation:
    - `customer.subscription.deleted` and `invoice.payment_failed` downgrade to `FREE`.
+
+## Payment Status + Reconcile (Task 6C)
+- User command: `/payment_status`
+  - Shows current plan, latest payment status, masked session/subscription IDs, and subscription state.
+  - If webhook was missed, this command attempts Stripe reconcile and auto-activates PRO when Stripe confirms payment.
+- Admin diagnostics:
+  - `/payments_recent [limit]`
+  - `/subs_past_due [limit]`
+  - `/force_sync_user <user_id>` (runs the same reconcile flow for target user)
 
 ## Manual Test Checklist (Task 5B Hardening)
 - Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.
@@ -119,10 +132,21 @@ If Stripe env vars are missing, bot still starts normally; `/buy_pro` returns a 
 ## Manual Test Checklist (Stripe)
 1. Run `/buy_pro` and complete checkout with Stripe test card.
 2. Confirm user receives Telegram message: payment received and PRO activated.
-3. Confirm `/plan` shows `PRO`.
+3. Confirm `/payment_status` and `/plan` show `PRO`.
 4. Confirm `upgrade_requests.paid=1` and request auto-approved when pending exists.
 5. Replay same Stripe event and confirm idempotency (no duplicate activation side effects).
 6. Trigger `invoice.payment_failed` or `customer.subscription.deleted` in Stripe test tools and confirm downgrade to `FREE`.
+7. Simulate missed webhook:
+   - stop webhook server, complete payment, run `/payment_status`, confirm reconcile activates PRO.
+8. Admin checks:
+   - `/payments_recent 20` returns latest payments.
+   - `/subs_past_due 20` returns past_due subscriptions.
+   - `/force_sync_user <user_id>` reports reconcile result.
+
+## Troubleshooting Payments
+- If payment completed but PRO is not active, run `/payment_status` to trigger reconcile.
+- If status remains pending for several minutes, retry `/payment_status`.
+- If reconcile keeps failing, check Stripe keys/webhook config and contact admin.
 
 ## Matching Quality
 - Smarter tokenization for tech names like `node.js`, `react-native`, `c++`, `c#`.

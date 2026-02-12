@@ -8,6 +8,8 @@ from .plan import router as plan_router
 from .settings import router as settings_router
 from .my_id import router as my_id_router
 from .buy_pro import router as buy_pro_router
+from .payment_status import router as payment_status_router
+from .payment_admin import router as payment_admin_router
 from .upgrade_request import router as upgrade_request_router
 
 __all__ = [
@@ -19,5 +21,7 @@ __all__ = [
     "settings_router",
     "my_id_router",
     "buy_pro_router",
+    "payment_status_router",
+    "payment_admin_router",
     "upgrade_request_router",
 ]
