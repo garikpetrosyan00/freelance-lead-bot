@@ -10,6 +10,7 @@ from typing import Any
 
 from aiogram import Bot
 
+from app.analytics import log_event
 from app.config import (
     get_stripe_secret_key,
     get_stripe_webhook_secret,
@@ -135,13 +136,21 @@ def _auto_approve_upgrade_request(user_id: int, request_id: int | None, decided_
         return
 
     attach_payment_to_upgrade_request(target_request_id, paid=1)
-    decide_upgrade_request(
+    decided = decide_upgrade_request(
         request_id=target_request_id,
         new_status="approved",
         admin_id=0,
         admin_note="auto via stripe",
         decided_at_iso=decided_at,
     )
+    if decided:
+        log_event(
+            "upgrade_approved",
+            user_id=user_id,
+            plan="PRO",
+            meta={"request_id": target_request_id, "source": "stripe_webhook_auto"},
+            ts=decided_at,
+        )
 
 
 async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) -> None:
@@ -166,6 +175,16 @@ async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) ->
         customer_id=str(session.get("customer") or "") or None,
         amount_total=int(session.get("amount_total")) if session.get("amount_total") is not None else None,
         currency=str(session.get("currency") or "") or None,
+    )
+    log_event(
+        "payment_confirmed",
+        user_id=user_id,
+        plan="PRO",
+        meta={
+            "source": "webhook:checkout.session.completed",
+            "checkout_session_id": session_id,
+            "subscription_id": str(session.get("subscription") or "") or None,
+        },
     )
 
     subscription_id = str(session.get("subscription") or "").strip()
@@ -207,6 +226,12 @@ async def _handle_invoice_paid(bot: Bot, event: dict[str, Any]) -> None:
     user_id = get_subscription_user_id(subscription_id) or get_payment_user_id_by_subscription_id(subscription_id)
     if user_id is None:
         return
+    log_event(
+        "payment_confirmed",
+        user_id=user_id,
+        plan="PRO",
+        meta={"source": "webhook:invoice.paid", "subscription_id": subscription_id},
+    )
 
     status = str(invoice.get("status") or "paid")
     period_end = _iso_from_unix(invoice.get("period_end"))

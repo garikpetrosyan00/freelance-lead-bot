@@ -21,6 +21,8 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 
 ## Run Smoke Test
 - `python -m app.scripts.smoke_pro_flow`
+- `python -m app.scripts.smoke_stripe_db`
+- `python -m app.scripts.smoke_analytics_db`
 
 ## Commands
 - `/start`
@@ -45,12 +47,20 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/payments_recent [limit]` (admin only)
 - `/subs_past_due [limit]` (admin only)
 - `/force_sync_user <user_id>` (admin only)
+- `/stats_today` (admin only)
+- `/stats_7d` (admin only)
+- `/funnel_7d` (admin only)
+- `/lead_quality_7d` (admin only)
+- `/quality_7d` (admin only)
+- `/blocks_7d` (admin only)
+- `/sources_7d [limit]` (admin only)
 - `/settings`
 - `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
 - `/set_daily_cap <N|unlimited>` (PRO only)
 
 ## Data
 - SQLite database: `data/app.db`
+- Analytics events table: `analytics_events` (append-only)
 
 ## Notifications
 - Fake ingestion generates a test lead about every ~60 seconds.
@@ -86,6 +96,24 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
   - `/payments_recent [limit]`
   - `/subs_past_due [limit]`
   - `/force_sync_user <user_id>` (runs the same reconcile flow for target user)
+
+## Analytics Events (Task 7A)
+Tracked events include:
+- `lead_ingested`, `lead_filtered`, `lead_matched`, `lead_sent`
+- `lead_blocked` (meta.reason: `dedupe|cooldown|cap|free_limit`)
+- `upgrade_requested`, `upgrade_approved`, `upgrade_rejected`
+- `checkout_created`, `payment_confirmed`
+- `pro_activated`, `pro_downgraded`
+- `reconcile_attempted`, `reconcile_succeeded`, `reconcile_noop`
+
+Admin analytics commands:
+- `/stats_today`
+- `/stats_7d`
+- `/funnel_7d`
+- `/lead_quality_7d`
+- `/quality_7d` (score buckets, avg score, levels, filtered rate)
+- `/blocks_7d` (lead_blocked reasons + FREE/PRO split)
+- `/sources_7d [limit]` (top sources with ingested/matched/sent counts)
 
 ## Manual Test Checklist (Task 5B Hardening)
 - Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.

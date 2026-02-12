@@ -9,6 +9,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.analytics import log_event
 from app.billing import create_checkout_session, get_stripe_checkout_config
 from app.db import (
     create_upgrade_request_with_state,
@@ -70,6 +71,16 @@ async def handle_buy_pro(message: Message) -> None:
     try:
         session = create_checkout_session(user_id=user_id, username=username, request_id=request_id)
         upsert_payment_from_checkout(session)
+        log_event(
+            "checkout_created",
+            user_id=user_id,
+            plan=get_user_plan(user_id),
+            meta={
+                "checkout_session_id": str(session.get("id") or ""),
+                "request_id": request_id,
+                "mode": cfg.mode,
+            },
+        )
     except Exception:
         logger.exception("Failed to create checkout session for user_id=%s", user_id)
         await message.answer(

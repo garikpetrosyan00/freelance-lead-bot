@@ -17,6 +17,7 @@ from aiogram.exceptions import (
 )
 from aiogram.types import Message
 
+from app.analytics import log_event
 from app.config import get_admin_user_ids, is_admin
 from app.db import (
     create_upgrade_request_with_state,
@@ -112,6 +113,12 @@ async def handle_request_pro(message: Message) -> None:
         await message.answer(f"Request already pending. ID: {request_id}")
         return
 
+    log_event(
+        "upgrade_requested",
+        user_id=user_id,
+        plan=get_user_plan(user_id),
+        meta={"request_id": request_id, "source": "command:/request_pro"},
+    )
     await message.answer(f"PRO request created. ID: {request_id}")
 
     lines = [
@@ -211,6 +218,19 @@ async def handle_approve_pro(message: Message, command: CommandObject) -> None:
         activated_at_iso=decided_at,
         plan="PRO",
     )
+    log_event(
+        "upgrade_approved",
+        user_id=int(request["user_id"]),
+        plan="PRO",
+        meta={"request_id": request_id, "admin_id": user.id, "source": "admin_command"},
+    )
+    log_event(
+        "pro_activated",
+        user_id=int(request["user_id"]),
+        plan="PRO",
+        meta={"source": "admin_approve", "request_id": request_id},
+        ts=decided_at,
+    )
 
     notified = await _notify_user_or_log(
         message.bot,
@@ -268,6 +288,13 @@ async def handle_reject_pro(message: Message, command: CommandObject) -> None:
         state = latest["status"] if latest else "unknown"
         await message.answer(f"Request already decided: {state}.")
         return
+    log_event(
+        "upgrade_rejected",
+        user_id=int(request["user_id"]),
+        plan=get_user_plan(int(request["user_id"])),
+        meta={"request_id": request_id, "admin_id": user.id, "reason": reason},
+        ts=decided_at,
+    )
 
     user_text = "Request rejected."
     if reason:

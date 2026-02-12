@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable, List
 
 DB_PATH = os.path.join("data", "app.db")
 DB_URI = False
+logger = logging.getLogger(__name__)
+_JSON_EXTRACT_SUPPORTED: bool | None = None
 
 
 def _connect() -> sqlite3.Connection:
@@ -165,6 +169,21 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                event TEXT NOT NULL,
+                user_id INTEGER,
+                lead_id TEXT,
+                match_level TEXT,
+                score INTEGER,
+                plan TEXT,
+                meta_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
             ON upgrade_requests(status, created_at)
             """
@@ -185,6 +204,30 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_payments_checkout_session_id
             ON payments(checkout_session_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ae_ts
+            ON analytics_events(ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ae_event_ts
+            ON analytics_events(event, ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ae_user_ts
+            ON analytics_events(user_id, ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ae_lead
+            ON analytics_events(lead_id)
             """
         )
         try:
@@ -950,14 +993,436 @@ def list_subscriptions_by_status(status: str, limit: int = 20) -> list[dict[str,
     return result
 
 
+def log_event(
+    event: str,
+    user_id: int | None = None,
+    lead_id: str | None = None,
+    match_level: str | None = None,
+    score: int | None = None,
+    plan: str | None = None,
+    meta: dict[str, Any] | None = None,
+    ts: str | None = None,
+) -> None:
+    timestamp = ts or _utc_now()
+    meta_json = (
+        json.dumps(meta, ensure_ascii=True, separators=(",", ":"))
+        if meta is not None
+        else None
+    )
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO analytics_events (
+                    ts,
+                    event,
+                    user_id,
+                    lead_id,
+                    match_level,
+                    score,
+                    plan,
+                    meta_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp,
+                    event.strip(),
+                    user_id,
+                    lead_id,
+                    match_level,
+                    score,
+                    plan,
+                    meta_json,
+                ),
+            )
+            conn.commit()
+    except Exception:
+        logger.warning("Failed to write analytics event=%s", event, exc_info=True)
+
+
+def get_event_counts(event: str | None, since_iso: str, until_iso: str) -> dict[str, int]:
+    with _connect() as conn:
+        if event:
+            row = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM analytics_events
+                WHERE event = ? AND ts >= ? AND ts < ?
+                """,
+                (event, since_iso, until_iso),
+            ).fetchone()
+            return {event: int(row[0]) if row else 0}
+
+        rows = conn.execute(
+            """
+            SELECT event, COUNT(*)
+            FROM analytics_events
+            WHERE ts >= ? AND ts < ?
+            GROUP BY event
+            """,
+            (since_iso, until_iso),
+        ).fetchall()
+    result: dict[str, int] = {}
+    for row in rows:
+        result[str(row[0])] = int(row[1])
+    return result
+
+
+def get_funnel(since_iso: str, until_iso: str) -> dict[str, int]:
+    counts = get_event_counts(None, since_iso, until_iso)
+    return {
+        "leads_ingested": int(counts.get("lead_ingested", 0)),
+        "leads_matched": int(counts.get("lead_matched", 0)),
+        "leads_sent": int(counts.get("lead_sent", 0)),
+        "upgrade_requested": int(counts.get("upgrade_requested", 0)),
+        "checkout_created": int(counts.get("checkout_created", 0)),
+        "payment_confirmed": int(counts.get("payment_confirmed", 0)),
+        "pro_activated": int(counts.get("pro_activated", 0)),
+    }
+
+
+def get_lead_quality_metrics(since_iso: str, until_iso: str) -> dict[str, Any]:
+    with _connect() as conn:
+        dist_rows = conn.execute(
+            """
+            SELECT match_level, COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_matched'
+              AND ts >= ?
+              AND ts < ?
+              AND match_level IS NOT NULL
+            GROUP BY match_level
+            """,
+            (since_iso, until_iso),
+        ).fetchall()
+        avg_row = conn.execute(
+            """
+            SELECT AVG(score)
+            FROM analytics_events
+            WHERE event = 'lead_matched'
+              AND ts >= ?
+              AND ts < ?
+              AND score IS NOT NULL
+            """,
+            (since_iso, until_iso),
+        ).fetchone()
+        filtered_row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_filtered'
+              AND ts >= ?
+              AND ts < ?
+            """,
+            (since_iso, until_iso),
+        ).fetchone()
+        ingested_row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_ingested'
+              AND ts >= ?
+              AND ts < ?
+            """,
+            (since_iso, until_iso),
+        ).fetchone()
+
+    distribution: dict[str, int] = {"LOW": 0, "MEDIUM": 0, "HIGH": 0}
+    for row in dist_rows:
+        level = str(row[0]).upper()
+        distribution[level] = int(row[1])
+    filtered = int(filtered_row[0]) if filtered_row else 0
+    ingested = int(ingested_row[0]) if ingested_row else 0
+    filtered_pct = (100.0 * filtered / ingested) if ingested > 0 else 0.0
+    return {
+        "match_level_distribution": distribution,
+        "avg_score": float(avg_row[0]) if avg_row and avg_row[0] is not None else None,
+        "filtered_count": filtered,
+        "ingested_count": ingested,
+        "filtered_pct": filtered_pct,
+    }
+
+
+def _json_extract_supported() -> bool:
+    global _JSON_EXTRACT_SUPPORTED
+    if _JSON_EXTRACT_SUPPORTED is not None:
+        return _JSON_EXTRACT_SUPPORTED
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT json_extract('{\"a\":1}', '$.a')"
+            ).fetchone()
+        _JSON_EXTRACT_SUPPORTED = bool(row and str(row[0]) == "1")
+    except Exception:
+        _JSON_EXTRACT_SUPPORTED = False
+    return _JSON_EXTRACT_SUPPORTED
+
+
+def get_score_buckets(since_iso: str, until_iso: str) -> dict[str, int]:
+    buckets = {
+        "0-24": 0,
+        "25-49": 0,
+        "50-69": 0,
+        "70-84": 0,
+        "85-100": 0,
+        "101+": 0,
+    }
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT score, COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_matched'
+              AND ts >= ?
+              AND ts < ?
+              AND score IS NOT NULL
+            GROUP BY score
+            """,
+            (since_iso, until_iso),
+        ).fetchall()
+
+    for row in rows:
+        score = int(row[0])
+        count = int(row[1])
+        if score <= 24:
+            buckets["0-24"] += count
+        elif score <= 49:
+            buckets["25-49"] += count
+        elif score <= 69:
+            buckets["50-69"] += count
+        elif score <= 84:
+            buckets["70-84"] += count
+        elif score <= 100:
+            buckets["85-100"] += count
+        else:
+            buckets["101+"] += count
+    return buckets
+
+
+def get_level_distribution(since_iso: str, until_iso: str) -> dict[str, int]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT match_level, COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_matched'
+              AND ts >= ?
+              AND ts < ?
+              AND match_level IS NOT NULL
+            GROUP BY match_level
+            """,
+            (since_iso, until_iso),
+        ).fetchall()
+    distribution = {"LOW": 0, "MEDIUM": 0, "HIGH": 0}
+    for row in rows:
+        distribution[str(row[0]).upper()] = int(row[1])
+    return distribution
+
+
+def get_filtered_metrics(since_iso: str, until_iso: str) -> dict[str, Any]:
+    with _connect() as conn:
+        ingested_row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_ingested'
+              AND ts >= ?
+              AND ts < ?
+            """,
+            (since_iso, until_iso),
+        ).fetchone()
+        filtered_row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM analytics_events
+            WHERE event = 'lead_filtered'
+              AND ts >= ?
+              AND ts < ?
+            """,
+            (since_iso, until_iso),
+        ).fetchone()
+    ingested = int(ingested_row[0]) if ingested_row else 0
+    filtered = int(filtered_row[0]) if filtered_row else 0
+    filtered_rate = (float(filtered) / float(ingested)) if ingested > 0 else 0.0
+    return {
+        "ingested": ingested,
+        "filtered": filtered,
+        "filtered_rate": filtered_rate,
+    }
+
+
+def get_block_reasons(since_iso: str, until_iso: str) -> dict[str, Any]:
+    reasons: dict[str, int] = {}
+    by_plan: dict[str, dict[str, int]] = {}
+    if _json_extract_supported():
+        try:
+            with _connect() as conn:
+                reason_rows = conn.execute(
+                    """
+                    SELECT COALESCE(json_extract(meta_json, '$.reason'), 'unknown') AS reason, COUNT(*)
+                    FROM analytics_events
+                    WHERE event = 'lead_blocked'
+                      AND ts >= ?
+                      AND ts < ?
+                    GROUP BY reason
+                    """,
+                    (since_iso, until_iso),
+                ).fetchall()
+                plan_rows = conn.execute(
+                    """
+                    SELECT COALESCE(plan, 'UNKNOWN') AS p,
+                           COALESCE(json_extract(meta_json, '$.reason'), 'unknown') AS reason,
+                           COUNT(*)
+                    FROM analytics_events
+                    WHERE event = 'lead_blocked'
+                      AND ts >= ?
+                      AND ts < ?
+                    GROUP BY p, reason
+                    """,
+                    (since_iso, until_iso),
+                ).fetchall()
+            for row in reason_rows:
+                reasons[str(row[0])] = int(row[1])
+            for row in plan_rows:
+                plan = str(row[0]).upper()
+                reason = str(row[1])
+                by_plan.setdefault(plan, {})
+                by_plan[plan][reason] = int(row[2])
+            return {"reasons": reasons, "by_plan": by_plan}
+        except Exception:
+            logger.warning("Analytics JSON mode failed, falling back", exc_info=True)
+
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT plan, meta_json
+            FROM analytics_events
+            WHERE event = 'lead_blocked'
+              AND ts >= ?
+              AND ts < ?
+            """,
+            (since_iso, until_iso),
+        ).fetchall()
+    for row in rows:
+        plan = str(row[0]).upper() if row[0] else "UNKNOWN"
+        reason = "unknown"
+        meta_json = row[1]
+        if meta_json:
+            try:
+                parsed = json.loads(str(meta_json))
+                if isinstance(parsed, dict):
+                    reason = str(parsed.get("reason") or "unknown")
+            except Exception:
+                reason = "unknown"
+        reasons[reason] = reasons.get(reason, 0) + 1
+        by_plan.setdefault(plan, {})
+        by_plan[plan][reason] = by_plan[plan].get(reason, 0) + 1
+    return {"reasons": reasons, "by_plan": by_plan}
+
+
+def get_source_stats(since_iso: str, until_iso: str, limit: int = 15) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 50))
+    source_counts: dict[str, dict[str, int]] = {}
+
+    if _json_extract_supported():
+        try:
+            with _connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT COALESCE(json_extract(meta_json, '$.source'), 'unknown') AS source,
+                           event,
+                           COUNT(*)
+                    FROM analytics_events
+                    WHERE event IN ('lead_ingested', 'lead_matched', 'lead_sent')
+                      AND ts >= ?
+                      AND ts < ?
+                    GROUP BY source, event
+                    """,
+                    (since_iso, until_iso),
+                ).fetchall()
+            for row in rows:
+                source = str(row[0])
+                event = str(row[1])
+                count = int(row[2])
+                source_counts.setdefault(source, {"ingested": 0, "matched": 0, "sent": 0})
+                if event == "lead_ingested":
+                    source_counts[source]["ingested"] += count
+                elif event == "lead_matched":
+                    source_counts[source]["matched"] += count
+                elif event == "lead_sent":
+                    source_counts[source]["sent"] += count
+        except Exception:
+            logger.warning("Analytics JSON mode failed, falling back", exc_info=True)
+            source_counts = {}
+
+    if not source_counts:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT event, meta_json
+                FROM analytics_events
+                WHERE event IN ('lead_ingested', 'lead_matched', 'lead_sent')
+                  AND ts >= ?
+                  AND ts < ?
+                """,
+                (since_iso, until_iso),
+            ).fetchall()
+        for row in rows:
+            event = str(row[0])
+            source = "unknown"
+            meta_json = row[1]
+            if meta_json:
+                try:
+                    parsed = json.loads(str(meta_json))
+                    if isinstance(parsed, dict):
+                        source = str(parsed.get("source") or "unknown")
+                except Exception:
+                    source = "unknown"
+            source_counts.setdefault(source, {"ingested": 0, "matched": 0, "sent": 0})
+            if event == "lead_ingested":
+                source_counts[source]["ingested"] += 1
+            elif event == "lead_matched":
+                source_counts[source]["matched"] += 1
+            elif event == "lead_sent":
+                source_counts[source]["sent"] += 1
+
+    ranked = sorted(
+        (
+            {
+                "source": source,
+                "ingested": counts["ingested"],
+                "matched": counts["matched"],
+                "sent": counts["sent"],
+            }
+            for source, counts in source_counts.items()
+        ),
+        key=lambda item: (item["ingested"], item["matched"], item["sent"]),
+        reverse=True,
+    )
+    return ranked[:safe_limit]
+
+
 def activate_pro_for_user(user_id: int, reason: str, activated_at_iso: str) -> None:
-    _ = reason
     mark_user_pro(user_id=user_id, enabled=True, activated_at_iso=activated_at_iso, plan="PRO")
+    log_event(
+        "pro_activated",
+        user_id=user_id,
+        plan="PRO",
+        meta={"reason": reason},
+        ts=activated_at_iso,
+    )
 
 
 def downgrade_user_to_free(user_id: int, reason: str, updated_at_iso: str) -> None:
-    _ = reason
     mark_user_pro(user_id=user_id, enabled=False, activated_at_iso=updated_at_iso, plan="FREE")
+    log_event(
+        "pro_downgraded",
+        user_id=user_id,
+        plan="FREE",
+        meta={"reason": reason},
+        ts=updated_at_iso,
+    )
 
 
 def get_daily_usage(user_id: int, day: str) -> int:

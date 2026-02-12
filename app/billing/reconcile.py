@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.analytics import log_event
 from app.config import get_stripe_secret_key
 from app.db import (
     activate_pro_for_user,
@@ -96,13 +97,20 @@ def _maybe_auto_approve(user_id: int, request_id: int | None, note: str) -> None
         return
 
     attach_payment_to_upgrade_request(target_request_id, paid=1)
-    decide_upgrade_request(
+    decided = decide_upgrade_request(
         request_id=target_request_id,
         new_status="approved",
         admin_id=0,
         admin_note=note,
         decided_at_iso=_utc_now_iso(),
     )
+    if decided:
+        log_event(
+            "upgrade_approved",
+            user_id=user_id,
+            plan="PRO",
+            meta={"request_id": target_request_id, "source": "reconcile_auto"},
+        )
 
 
 def _extract_session_subscription(session: dict[str, Any]) -> tuple[str | None, str | None, str | None, str | None]:
@@ -185,6 +193,16 @@ def reconcile_user_payment(user_id: int, force: bool = False) -> ReconcileResult
                     amount_total=int(session.get("amount_total")) if session.get("amount_total") is not None else None,
                     currency=str(session.get("currency") or "") or None,
                 )
+                log_event(
+                    "payment_confirmed",
+                    user_id=user_id,
+                    plan="PRO",
+                    meta={
+                        "source": "reconcile:checkout",
+                        "checkout_session_id": checkout_session_id,
+                        "subscription_id": subscription_id_resolved,
+                    },
+                )
                 if subscription_id_resolved:
                     upsert_stripe_subscription(
                         user_id=user_id,
@@ -223,6 +241,12 @@ def reconcile_user_payment(user_id: int, force: bool = False) -> ReconcileResult
                 current_period_end=_iso_from_unix(sub.get("current_period_end")),
             )
             if status in {"active", "trialing"}:
+                log_event(
+                    "payment_confirmed",
+                    user_id=user_id,
+                    plan="PRO",
+                    meta={"source": "reconcile:subscription", "subscription_id": subscription_id, "status": status},
+                )
                 activate_pro_for_user(user_id, reason="stripe_reconcile_subscription_active", activated_at_iso=_utc_now_iso())
                 request_id = latest.get("request_id")
                 _maybe_auto_approve(user_id, request_id, "auto reconcile via /payment_status")

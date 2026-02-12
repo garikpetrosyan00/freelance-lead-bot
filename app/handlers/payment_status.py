@@ -8,6 +8,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.analytics import log_event
 from app.billing import (
     get_user_subscription_status,
     mask_id,
@@ -52,7 +53,22 @@ async def handle_payment_status(message: Message) -> None:
         await message.answer("\n".join(lines))
         return
 
+    log_event("reconcile_attempted", user_id=user_id, plan=get_user_plan(user_id), meta={"source": "/payment_status"})
     reconcile = reconcile_user_payment(user_id=user_id, force=False)
+    if reconcile.changed:
+        log_event(
+            "reconcile_succeeded",
+            user_id=user_id,
+            plan="PRO",
+            meta={"source": "/payment_status", "message": reconcile.message},
+        )
+    else:
+        log_event(
+            "reconcile_noop",
+            user_id=user_id,
+            plan=get_user_plan(user_id),
+            meta={"source": "/payment_status", "message": reconcile.message},
+        )
     latest = get_latest_payment_for_user(user_id)
     plan = get_user_plan(user_id)
 

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from aiogram import Bot
 
+from app.analytics import log_event
 from app.db import (
     get_daily_usage,
     get_last_sent_at,
@@ -37,13 +38,20 @@ def _lead_hash(lead: Lead) -> str:
 
 async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
     lead_hash = _lead_hash(lead)
+    plan = get_plan(user_id)
     if has_seen_lead(user_id, lead_hash):
         logging.getLogger(__name__).info(
             "Notification blocked: user=%s reason=duplicate", user_id
         )
+        log_event(
+            "lead_blocked",
+            user_id=user_id,
+            lead_id=lead_hash,
+            plan=plan,
+            meta={"reason": "dedupe", "source": lead.source},
+        )
         return False
 
-    plan = get_plan(user_id)
     now = datetime.now(timezone.utc)
     last_sent_at = get_last_sent_at(user_id)
     cooldown_seconds = 30 if plan == "PRO" else 120
@@ -57,6 +65,13 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
                     "Notification blocked: user=%s reason=cooldown plan=%s",
                     user_id,
                     plan,
+                )
+                log_event(
+                    "lead_blocked",
+                    user_id=user_id,
+                    lead_id=lead_hash,
+                    plan=plan,
+                    meta={"reason": "cooldown", "source": lead.source},
                 )
                 return False
         except ValueError:
@@ -77,6 +92,20 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
             reason,
             plan,
             match_level,
+        )
+        blocked_reason = (
+            "cap"
+            if reason == "daily_cap_reached"
+            else "free_limit"
+            if reason == "level_not_allowed" and plan == "FREE"
+            else reason
+        )
+        log_event(
+            "lead_blocked",
+            user_id=user_id,
+            lead_id=lead_hash,
+            plan=plan,
+            meta={"reason": blocked_reason, "source": lead.source},
         )
         return False
 
@@ -109,4 +138,13 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
     increment_daily_usage(user_id, day, by=1)
     set_last_sent_at(user_id, now.isoformat())
     mark_seen_lead(user_id, lead_hash)
+    log_event(
+        "lead_sent",
+        user_id=user_id,
+        lead_id=lead_hash,
+        match_level=str(match.get("level") or ""),
+        score=int(match.get("score") or 0),
+        plan=plan,
+        meta={"source": lead.source},
+    )
     return True

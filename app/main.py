@@ -15,6 +15,7 @@ from app.config import (
 )
 from app.db import init_db
 from app.handlers import (
+    analytics_admin_router,
     buy_pro_router,
     my_id_router,
     payment_admin_router,
@@ -68,6 +69,7 @@ async def main() -> None:
     dp.include_router(buy_pro_router)
     dp.include_router(payment_status_router)
     dp.include_router(payment_admin_router)
+    dp.include_router(analytics_admin_router)
     dp.include_router(upgrade_request_router)
 
     tasks: list[asyncio.Task] = []
