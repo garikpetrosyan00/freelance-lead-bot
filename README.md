@@ -54,6 +54,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/quality_7d` (admin only)
 - `/blocks_7d` (admin only)
 - `/sources_7d [limit]` (admin only)
+- `/retention_7d` (admin only)
+- `/retention_30d` (admin only)
+- `/pro_health_30d` (admin only)
 - `/settings`
 - `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
 - `/set_daily_cap <N|unlimited>` (PRO only)
@@ -114,6 +117,15 @@ Admin analytics commands:
 - `/quality_7d` (score buckets, avg score, levels, filtered rate)
 - `/blocks_7d` (lead_blocked reasons + FREE/PRO split)
 - `/sources_7d [limit]` (top sources with ingested/matched/sent counts)
+- `/retention_7d` (DAU/WAU/MAU rolling windows + stickiness + 7-day retention)
+- `/retention_30d` (30-day view with compact summary + latest 7 lines)
+- `/pro_health_30d` (PRO lifecycle counts, conversions, active PRO now, time-to-activate)
+
+Definitions used by retention/engagement:
+- Active user events: `lead_sent`, `lead_blocked`, `upgrade_requested`, `checkout_created`, `payment_confirmed`, `pro_activated` (plus `reconcile_attempted`).
+- WAU is rolling 7-day active users for each day D over `[D-6, D]`.
+- MAU is rolling 28-day active users for each day D over `[D-27, D]`.
+- 7-day retention for day D is intersection of users active on D and D-7 divided by users active on D.
 
 ## Manual Test Checklist (Task 5B Hardening)
 - Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.

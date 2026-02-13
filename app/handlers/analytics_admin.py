@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
 from aiogram.types import Message
 
 from app.analytics import day_window_utc, rolling_days_window_utc
+from app.analytics.retention import (
+    get_dau_series,
+    get_mau_series_28d,
+    get_pro_health,
+    get_retention_7d_series,
+    get_wau_series,
+)
 from app.config import is_admin
 from app.db import (
     get_block_reasons,
@@ -45,6 +54,86 @@ def _parse_limit(command: CommandObject, default: int = 10) -> int:
     if limit < 1 or limit > 50:
         raise ValueError
     return limit
+
+
+def _series_window_utc(days: int) -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    since = today_start - timedelta(days=max(1, int(days)) - 1)
+    until = today_start + timedelta(days=1)
+    return since.isoformat(), until.isoformat()
+
+
+def _fmt_ratio(numerator: int, denominator: int) -> str:
+    if denominator <= 0:
+        return "0.0%"
+    return f"{(100.0 * numerator / denominator):.1f}%"
+
+
+def _render_retention_lines(days: int) -> list[str]:
+    since_iso, until_iso = _series_window_utc(days)
+    dau_rows = get_dau_series(since_iso, until_iso)
+    wau_rows = get_wau_series(since_iso, until_iso)
+    mau_rows = get_mau_series_28d(since_iso, until_iso)
+    retention_rows = get_retention_7d_series(since_iso, until_iso)
+
+    by_day: dict[str, dict[str, float | int]] = {}
+    for row in dau_rows:
+        by_day.setdefault(str(row["date"]), {})
+        by_day[str(row["date"])]["dau"] = int(row.get("dau", 0))
+    for row in wau_rows:
+        by_day.setdefault(str(row["date"]), {})
+        by_day[str(row["date"])]["wau"] = int(row.get("wau", 0))
+    for row in mau_rows:
+        by_day.setdefault(str(row["date"]), {})
+        by_day[str(row["date"])]["mau"] = int(row.get("mau", 0))
+    for row in retention_rows:
+        by_day.setdefault(str(row["date"]), {})
+        by_day[str(row["date"])]["retention_7d_pct"] = float(row.get("retention_7d_pct", 0.0))
+
+    rows: list[str] = []
+    rows.append("date       dau  wau  mau  dau/wau dau/mau  ret7d")
+    for day in sorted(by_day):
+        dau = int(by_day[day].get("dau", 0))
+        wau = int(by_day[day].get("wau", 0))
+        mau = int(by_day[day].get("mau", 0))
+        retention_pct = float(by_day[day].get("retention_7d_pct", 0.0))
+        rows.append(
+            f"{day} {dau:>4} {wau:>4} {mau:>4} "
+            f"{_fmt_ratio(dau, wau):>7} {_fmt_ratio(dau, mau):>7} {retention_pct:>6.1f}%"
+        )
+    return rows
+
+
+def _render_pro_health_30d_lines() -> list[str]:
+    since_iso, until_iso = rolling_days_window_utc(30)
+    health = get_pro_health(since_iso, until_iso)
+    conversions = health.get("conversions", {})
+    time_to_activate = health.get("time_to_activate", {})
+    avg_minutes = time_to_activate.get("avg_minutes")
+    median_minutes = time_to_activate.get("median_minutes")
+    tta_line = "time_to_activate: -"
+    if avg_minutes is not None:
+        if median_minutes is not None:
+            tta_line = f"time_to_activate: median {float(median_minutes):.1f}m, avg {float(avg_minutes):.1f}m"
+        else:
+            tta_line = f"time_to_activate: avg {float(avg_minutes):.1f}m"
+
+    lines = [
+        "PRO health (last 30d UTC):",
+        f"pro_activated: {int(health.get('pro_activated', 0))}",
+        f"pro_downgraded: {int(health.get('pro_downgraded', 0))}",
+        f"subscription_canceled: {int(health.get('subscription_canceled', 0))}",
+        f"subscription_deleted: {int(health.get('subscription_deleted', 0))}",
+        f"net_change: {int(health.get('net_change', 0))}",
+        f"active_pro_now: {int(health.get('active_pro_now', 0))}",
+        "conversions:",
+        f"checkout->paid: {float(conversions.get('checkout_to_paid_pct', 0.0)):.1f}%",
+        f"paid->activated: {float(conversions.get('paid_to_activated_pct', 0.0)):.1f}%",
+        f"upgrade_requested->activated: {float(conversions.get('upgrade_requested_to_activated_pct', 0.0)):.1f}%",
+        tta_line,
+    ]
+    return lines
 
 
 @router.message(Command("stats_today"))
@@ -230,3 +319,66 @@ async def handle_sources_7d(message: Message, command: CommandObject) -> None:
             f"{row['source']}: ingested {row['ingested']}, matched {row['matched']}, sent {row['sent']}"
         )
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("retention_7d"))
+async def handle_retention_7d(message: Message) -> None:
+    if not _is_admin(message):
+        await message.answer("Unauthorized")
+        return
+
+    lines = ["Retention (last 7d UTC):"]
+    lines.extend(_render_retention_lines(7))
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("retention_30d"))
+async def handle_retention_30d(message: Message) -> None:
+    if not _is_admin(message):
+        await message.answer("Unauthorized")
+        return
+
+    rows = _render_retention_lines(30)
+    if len(rows) <= 9:
+        lines = ["Retention (last 30d UTC):"]
+        lines.extend(rows)
+        await message.answer("\n".join(lines))
+        return
+
+    data_rows = rows[1:]
+    dau_total = 0
+    wau_total = 0
+    mau_total = 0
+    retention_total = 0.0
+    parsed_rows = 0
+    for row in data_rows:
+        parts = row.split()
+        if len(parts) < 7:
+            continue
+        try:
+            dau_total += int(parts[1])
+            wau_total += int(parts[2])
+            mau_total += int(parts[3])
+            retention_total += float(parts[6].replace("%", ""))
+            parsed_rows += 1
+        except Exception:
+            continue
+
+    avg_retention = (retention_total / parsed_rows) if parsed_rows > 0 else 0.0
+    lines = [
+        "Retention (last 30d UTC):",
+        f"summary: days={parsed_rows}, avg DAU={int(dau_total / parsed_rows) if parsed_rows else 0}, avg WAU={int(wau_total / parsed_rows) if parsed_rows else 0}, avg MAU={int(mau_total / parsed_rows) if parsed_rows else 0}, avg ret7d={avg_retention:.1f}%",
+        "last 7 days:",
+        rows[0],
+    ]
+    lines.extend(data_rows[-7:])
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("pro_health_30d"))
+async def handle_pro_health_30d(message: Message) -> None:
+    if not _is_admin(message):
+        await message.answer("Unauthorized")
+        return
+
+    await message.answer("\n".join(_render_pro_health_30d_lines()))
