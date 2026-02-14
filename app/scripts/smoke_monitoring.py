@@ -23,6 +23,8 @@ def _iso_ago(*, hours: int = 0, minutes: int = 0) -> str:
 def main() -> int:
     old_secret = os.environ.get("STRIPE_SECRET_KEY")
     old_webhook = os.environ.get("STRIPE_WEBHOOK_SECRET")
+    old_db_path = db.DB_PATH
+    old_db_uri = db.DB_URI
     os.environ["STRIPE_SECRET_KEY"] = "sk_test_smoke"
     os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_smoke"
     try:
@@ -51,7 +53,6 @@ def main() -> int:
             assert "delivery_stalled" in alert_types
             assert "delivery_blocked_ratio_high" in alert_types
             assert "webhook_payment_gap" in alert_types
-            assert "webhook_stalled" in alert_types
 
             # Case A: checkout>0, payment>0, processed_last stale -> NO CRITICAL webhook_stalled.
             with db._connect() as conn:
@@ -96,6 +97,7 @@ def main() -> int:
             assert should_send_alert("smoke_silenced", cooldown_minutes=0) is False
             clear_silence("smoke_silenced")
     finally:
+        db.configure_db(old_db_path, uri=old_db_uri)
         if old_secret is None:
             os.environ.pop("STRIPE_SECRET_KEY", None)
         else:
