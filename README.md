@@ -23,6 +23,7 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `python -m app.scripts.smoke_pro_flow`
 - `python -m app.scripts.smoke_stripe_db`
 - `python -m app.scripts.smoke_analytics_db`
+- `python -m app.scripts.smoke_monitoring`
 
 ## Commands
 - `/start`
@@ -57,6 +58,10 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/retention_7d` (admin only)
 - `/retention_30d` (admin only)
 - `/pro_health_30d` (admin only)
+- `/health` (admin only)
+- `/alerts_recent [limit]` (admin only)
+- `/silence <alert_type> <minutes>` (admin only)
+- `/unsilence <alert_type>` (admin only)
 - `/settings`
 - `/set_min_level LOW|MEDIUM|HIGH` (PRO only)
 - `/set_daily_cap <N|unlimited>` (PRO only)
@@ -126,6 +131,41 @@ Definitions used by retention/engagement:
 - WAU is rolling 7-day active users for each day D over `[D-6, D]`.
 - MAU is rolling 28-day active users for each day D over `[D-27, D]`.
 - 7-day retention for day D is intersection of users active on D and D-7 divided by users active on D.
+
+## Monitoring + Alerts (Task 7D)
+Admin monitoring commands:
+- `/health` (run checks once and print component status)
+- `/alerts_recent [limit]` (latest monitor alerts, default 10, max 50)
+- `/silence <alert_type> <minutes>` (temporarily suppress one alert type)
+- `/unsilence <alert_type>` (remove suppression)
+
+Checks implemented:
+- Ingestion freshness:
+  - `WARN` when no `lead_ingested` for >30 minutes.
+  - `CRITICAL` when no `lead_ingested` for >120 minutes.
+- Delivery health:
+  - `WARN` when no `lead_sent` for >60 minutes while there is ingest/match traffic.
+  - `WARN` when `lead_blocked` ratio in last 24h exceeds 80%.
+- Billing/webhook signals:
+  - `INFO` when no `payment_confirmed` in last 7 days (when Stripe is configured).
+  - `WARN` when there are `checkout_created` events but zero `payment_confirmed` in last 6h.
+  - `CRITICAL` when webhook processing appears stale during checkout traffic.
+- DB health:
+  - `CRITICAL` if basic DB query fails.
+  - Optional `INFO` if DB file is very large.
+
+Background monitor loop:
+- Starts automatically with the bot and runs every 5 minutes.
+- Sends alerts to `ADMIN_USER_IDS`.
+- Cooldowns:
+  - `CRITICAL`: 15 minutes
+  - `WARN`: 60 minutes
+  - `INFO`: 12 hours
+- Alert state persists in SQLite tables:
+  - `monitor_state` (cooldowns, silence flags)
+  - `monitor_alerts` (history)
+
+Thresholds and intervals are constants in `app/monitoring/health.py`.
 
 ## Manual Test Checklist (Task 5B Hardening)
 - Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.

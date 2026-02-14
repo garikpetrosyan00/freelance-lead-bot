@@ -17,6 +17,7 @@ from app.db import init_db
 from app.handlers import (
     analytics_admin_router,
     buy_pro_router,
+    monitoring_admin_router,
     my_id_router,
     payment_admin_router,
     payment_status_router,
@@ -29,6 +30,7 @@ from app.handlers import (
     upgrade_request_router,
 )
 from app.ingestion.telegram_listener import run_telegram_listener
+from app.monitoring import run_monitor_loop
 from app.pipeline import run_fake_ingestion
 from app.webhooks import is_stripe_webhook_enabled, run_stripe_webhook_server
 
@@ -70,6 +72,7 @@ async def main() -> None:
     dp.include_router(payment_status_router)
     dp.include_router(payment_admin_router)
     dp.include_router(analytics_admin_router)
+    dp.include_router(monitoring_admin_router)
     dp.include_router(upgrade_request_router)
 
     tasks: list[asyncio.Task] = []
@@ -118,6 +121,10 @@ async def main() -> None:
         ready_wait_task.cancel()
         with suppress(asyncio.CancelledError):
             await ready_wait_task
+
+    monitor_task = asyncio.create_task(run_monitor_loop(bot))
+    monitor_task.add_done_callback(_log_task_failure)
+    tasks.append(monitor_task)
 
     logger.info("Starting bot polling")
     try:

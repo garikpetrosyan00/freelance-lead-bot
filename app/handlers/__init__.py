@@ -11,6 +11,7 @@ from .buy_pro import router as buy_pro_router
 from .payment_status import router as payment_status_router
 from .payment_admin import router as payment_admin_router
 from .analytics_admin import router as analytics_admin_router
+from .monitoring_admin import router as monitoring_admin_router
 from .upgrade_request import router as upgrade_request_router
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "payment_status_router",
     "payment_admin_router",
     "analytics_admin_router",
+    "monitoring_admin_router",
     "upgrade_request_router",
 ]

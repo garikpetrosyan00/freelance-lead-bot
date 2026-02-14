@@ -184,6 +184,27 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS monitor_state (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS monitor_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT NOT NULL,
+                meta_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
             ON upgrade_requests(status, created_at)
             """
@@ -228,6 +249,18 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_ae_lead
             ON analytics_events(lead_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_monitor_alerts_ts
+            ON monitor_alerts(ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_monitor_alerts_type_ts
+            ON monitor_alerts(alert_type, ts)
             """
         )
         try:
