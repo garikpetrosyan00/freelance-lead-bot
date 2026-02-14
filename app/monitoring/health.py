@@ -14,6 +14,7 @@ from aiogram import Bot
 
 from app import db as db_module
 from app.config import get_admin_user_ids, get_stripe_secret_key, get_stripe_webhook_secret
+from app.ops.logging_utils import mask_user_id, safe_exc
 from app.webhooks import is_stripe_webhook_enabled
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,7 @@ MONITOR_INTERVAL_SECONDS = 5 * 60
 
 
 def _connect() -> sqlite3.Connection:
-    return sqlite3.connect(db_module.DB_PATH, uri=db_module.DB_URI)
+    return db_module._connect()
 
 
 def utc_now_iso() -> str:
@@ -452,8 +453,17 @@ async def _send_to_admins(bot: Bot, text: str) -> None:
     for admin_id in sorted(admin_ids):
         try:
             await bot.send_message(chat_id=admin_id, text=text)
-        except Exception:
-            logger.warning("Failed to send monitor alert to admin_id=%s", admin_id, exc_info=True)
+        except Exception as exc:
+            db_module.record_error(
+                "monitoring",
+                exc,
+                context={"admin_id": admin_id, "action": "send_monitor_alert"},
+            )
+            logger.warning(
+                "Failed to send monitor alert to admin_id=%s error=%s",
+                mask_user_id(admin_id),
+                safe_exc(exc),
+            )
 
 
 async def run_monitor_loop(bot: Bot, interval_seconds: int = MONITOR_INTERVAL_SECONDS) -> None:
@@ -473,7 +483,8 @@ async def run_monitor_loop(bot: Bot, interval_seconds: int = MONITOR_INTERVAL_SE
                 record_alert(alert)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.warning("Monitoring loop iteration failed", exc_info=True)
+        except Exception as exc:
+            db_module.record_error("monitoring", exc, context={"action": "monitor_loop_iteration"})
+            logger.warning("Monitoring loop iteration failed: %s", safe_exc(exc), exc_info=True)
 
         await asyncio.sleep(safe_interval)

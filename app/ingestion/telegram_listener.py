@@ -15,11 +15,12 @@ from telethon.tl.custom.message import Message
 
 from app.analytics import lead_id_from_lead, log_event
 from app.config import get_tg_api_hash, get_tg_api_id, get_tg_source_chats
-from app.db import get_plan, get_skills, list_subscribed_users
+from app.db import get_plan, get_skills, list_subscribed_users, record_error
 from app.filters import is_low_quality
 from app.leads import Lead
 from app.matching import match_lead
 from app.notify import send_lead
+from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,19 @@ async def _dispatch_lead(bot: Bot, lead: Lead) -> int:
             )
             if await send_lead(bot, user_id, lead, result):
                 notified += 1
-        except Exception:
-            logger.exception("Failed to notify user %s", user_id)
+        except Exception as exc:
+            record_error(
+                "ingestion",
+                exc,
+                context={"user_id": user_id, "source": lead.source, "action": "telegram_dispatch"},
+            )
+            log_kv(
+                logger,
+                logging.WARNING,
+                "Telegram dispatch user failed",
+                user=mask_user_id(user_id),
+                error=safe_exc(exc),
+            )
     return notified
 
 
@@ -162,8 +174,13 @@ async def run_telegram_listener(bot: Bot) -> None:
         try:
             notified = await _dispatch_lead(bot, lead)
             logger.info("Telegram lead sent to %s users", notified)
-        except Exception:
-            logger.exception("Failed to dispatch telegram lead")
+        except Exception as exc:
+            record_error(
+                "ingestion",
+                exc,
+                context={"source": lead.source, "action": "telegram_lead_dispatch"},
+            )
+            log_kv(logger, logging.ERROR, "Failed to dispatch telegram lead", error=safe_exc(exc))
 
     try:
         await client.run_until_disconnected()

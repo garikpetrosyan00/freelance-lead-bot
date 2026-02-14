@@ -24,7 +24,7 @@ _ACTIVITY_EVENTS = (
 
 
 def _connect() -> sqlite3.Connection:
-    return sqlite3.connect(db_module.DB_PATH, uri=db_module.DB_URI)
+    return db_module._connect()
 
 
 def _parse_iso_utc(iso_value: str) -> datetime:

@@ -8,15 +8,11 @@ from aiogram.filters.command import CommandObject
 from aiogram.types import Message
 
 from app.billing import get_user_subscription_status, mask_id, reconcile_user_payment
-from app.config import is_admin
 from app.db import get_latest_payment_for_user, get_user_plan, list_recent_payments, list_subscriptions_by_status
+from app.ops.auth import require_admin, require_super_admin
+from app.ops.validation import parse_int
 
 router = Router()
-
-
-def _is_admin(message: Message) -> bool:
-    user = message.from_user
-    return bool(user and is_admin(user.id))
 
 
 def _parse_limit(raw: str | None, default: int = 20) -> tuple[int | None, str | None]:
@@ -26,18 +22,15 @@ def _parse_limit(raw: str | None, default: int = 20) -> tuple[int | None, str | 
     if len(parts) != 1:
         return None, "Invalid limit. Use one integer between 1 and 200."
     token = parts[0]
-    if not token.isdigit():
+    parsed = parse_int(token, min=1, max=200, default=None)
+    if parsed is None:
         return None, "Invalid limit. Use one integer between 1 and 200."
-    limit = int(token)
-    if limit < 1 or limit > 200:
-        return None, "Invalid limit. Use one integer between 1 and 200."
-    return limit, None
+    return parsed, None
 
 
 @router.message(Command("payments_recent"))
 async def handle_payments_recent(message: Message, command: CommandObject) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     limit, err = _parse_limit(command.args, default=20)
@@ -64,8 +57,7 @@ async def handle_payments_recent(message: Message, command: CommandObject) -> No
 
 @router.message(Command("subs_past_due"))
 async def handle_subs_past_due(message: Message, command: CommandObject) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     limit, err = _parse_limit(command.args, default=20)
@@ -90,16 +82,16 @@ async def handle_subs_past_due(message: Message, command: CommandObject) -> None
 
 @router.message(Command("force_sync_user"))
 async def handle_force_sync_user(message: Message, command: CommandObject) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_super_admin(message):
         return
 
     args = (command.args or "").strip()
-    if not args or len(args.split()) != 1 or not args.isdigit() or int(args) <= 0:
+    parsed_user_id = parse_int(args, min=1, max=2_147_483_647, default=None)
+    if not args or len(args.split()) != 1 or parsed_user_id is None:
         await message.answer("Usage: /force_sync_user <user_id>\nExample: /force_sync_user 123456789")
         return
 
-    user_id = int(args)
+    user_id = int(parsed_user_id)
     result = reconcile_user_payment(user_id=user_id, force=True)
     latest = get_latest_payment_for_user(user_id)
     plan = get_user_plan(user_id)

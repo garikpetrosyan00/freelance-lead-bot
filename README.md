@@ -24,6 +24,9 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `python -m app.scripts.smoke_stripe_db`
 - `python -m app.scripts.smoke_analytics_db`
 - `python -m app.scripts.smoke_monitoring`
+- `python -m app.scripts.smoke_backup_db`
+- `python -m app.scripts.smoke_errors_db`
+- `python -m app.scripts.smoke_rate_limit`
 
 ## Commands
 - `/start`
@@ -60,6 +63,8 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 - `/pro_health_30d` (admin only)
 - `/health` (admin only)
 - `/alerts_recent [limit]` (admin only)
+- `/diag [hours]` (admin only)
+- `/errors_recent [limit]` (admin only)
 - `/silence <alert_type> <minutes>` (admin only)
 - `/unsilence <alert_type>` (admin only)
 - `/settings`
@@ -69,6 +74,63 @@ Minimal Telegram bot using Python and aiogram v3 (polling).
 ## Data
 - SQLite database: `data/app.db`
 - Analytics events table: `analytics_events` (append-only)
+
+## SQLite Reliability Hardening
+Each DB connection applies the following SQLite pragmas:
+- `foreign_keys=ON`
+- `journal_mode=WAL`
+- `synchronous=NORMAL`
+- `busy_timeout=5000`
+- `temp_store=MEMORY`
+- `wal_autocheckpoint=1000`
+- `journal_size_limit=67108864`
+
+Startup now runs fail-fast DB sanity checks before polling:
+- validates DB path is creatable/writable
+- opens DB and runs `SELECT 1`
+- runs schema init
+- verifies critical tables exist (`upgrade_requests`, `analytics_events`, `monitor_state`, `monitor_alerts`, plus Stripe tables when webhook billing is enabled)
+
+If checks fail, bot logs `CRITICAL` and exits instead of running with a broken DB.
+
+## Backups (SQLite Online Backup API)
+Create backup snapshots safely from a live DB:
+- `python3 -m app.scripts.backup_db --out-dir backups --keep 14 --prefix botdb`
+
+Behavior:
+- backup file format: `botdb_YYYYMMDD_HHMMSS.db` (UTC)
+- uses SQLite `Connection.backup(...)` (safe snapshot, not raw file copy)
+- rotates old backups and keeps the newest `N`
+
+Cron example (daily at 02:30 UTC):
+```cron
+30 2 * * * cd /home/garik/projects/freelance-lead-bot && /usr/bin/python3 -m app.scripts.backup_db --out-dir backups --keep 14 --prefix botdb >> backups/backup.log 2>&1
+```
+
+systemd timer sketch:
+```ini
+# /etc/systemd/system/freelance-lead-bot-backup.service
+[Unit]
+Description=Freelance Lead Bot DB Backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/garik/projects/freelance-lead-bot
+ExecStart=/usr/bin/python3 -m app.scripts.backup_db --out-dir backups --keep 14 --prefix botdb
+```
+
+```ini
+# /etc/systemd/system/freelance-lead-bot-backup.timer
+[Unit]
+Description=Run Freelance Lead Bot DB backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
 
 ## Notifications
 - Fake ingestion generates a test lead about every ~60 seconds.
@@ -136,6 +198,8 @@ Definitions used by retention/engagement:
 Admin monitoring commands:
 - `/health` (run checks once and print component status)
 - `/alerts_recent [limit]` (latest monitor alerts, default 10, max 50)
+- `/diag [hours]` (compact runtime/DB/activity/errors diagnostics, default 24h, max 168h)
+- `/errors_recent [limit]` (recent error telemetry rows, default 10, max 30)
 - `/silence <alert_type> <minutes>` (temporarily suppress one alert type)
 - `/unsilence <alert_type>` (remove suppression)
 
@@ -166,6 +230,32 @@ Background monitor loop:
   - `monitor_alerts` (history)
 
 Thresholds and intervals are constants in `app/monitoring/health.py`.
+
+## Observability + Privacy Hygiene
+- Structured log helper in `app/ops/logging_utils.py`:
+  - `log_kv(...)` for stable `key=value` logs
+  - `mask_user_id(...)` and `mask_stripe_id(...)`
+  - `sanitize_meta(...)` for safe telemetry context
+- Error telemetry is stored in SQLite table `error_events`:
+  - columns: `ts`, `component`, `error_type`, `message`, `context_json`
+  - indexes: `idx_error_events_ts`, `idx_error_events_component_ts`
+- `context_json` is capped to `MAX_ERROR_CONTEXT_BYTES` (8KB) with a compact truncation fallback to control DB growth.
+- Repeated identical errors are deduplicated for `ERROR_DEDUPE_WINDOW_SECONDS` (5 minutes) to reduce telemetry spam.
+- Secret-like keys (token/secret/password/etc.) are redacted and email-like strings are masked before storing context.
+- Logging/telemetry paths are best-effort and do not crash bot runtime.
+
+## Security + Abuse Guardrails
+- Command throttling is enforced via aiogram middleware (`app/middlewares/rate_limit.py`):
+  - default user commands: `10/min` per user
+  - admin commands: `30/min` for admins, `3/min` for non-admins
+  - heavy commands (`/diag`, `/retention_30d`, `/sources_7d`): `1/10s` per user
+- Rate-limit state uses in-memory counters, with best-effort deny/heartbeat persistence in SQLite `monitor_state`.
+- Admin authorization is centralized in `app/ops/auth.py` (`require_admin`, `require_super_admin`).
+- Input validation helpers are centralized in `app/ops/validation.py` and used by sensitive admin commands.
+- Secret redaction helper (`app/ops/secrets.py`) masks bot tokens, Stripe keys, and Bearer headers before logging/telemetry.
+
+Optional hardening:
+- `SUPER_ADMIN_IDS` (comma-separated user IDs) can restrict risky commands (`/silence`, `/unsilence`, `/force_sync_user`) to a narrower allowlist.
 
 ## Manual Test Checklist (Task 5B Hardening)
 - Run `/request_pro` twice from the same user and confirm the second response shows "Request already pending" with the same request ID.

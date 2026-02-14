@@ -6,9 +6,11 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.config import get_payment_link, get_upgrade_contact, is_admin
+from app.config import get_payment_link, get_upgrade_contact
 from app.db import get_daily_usage, get_plan, set_plan, utc_day
 from app.gating import FREE_DAILY_CAP, allowed_match_levels
+from app.ops.auth import require_admin
+from app.ops.validation import parse_choice, parse_int
 
 router = Router()
 
@@ -54,8 +56,7 @@ async def handle_upgrade(message: Message) -> None:
 
 @router.message(Command("set_plan"))
 async def handle_set_plan(message: Message) -> None:
-    if not is_admin(message.from_user.id):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     parts = (message.text or "").split()
@@ -63,15 +64,19 @@ async def handle_set_plan(message: Message) -> None:
         await message.answer("Usage: /set_plan FREE|PRO")
         return
 
-    plan = parts[1].upper().strip()
+    plan = parse_choice(parts[1], {"FREE", "PRO"})
+    if plan is None:
+        await message.answer("Plan must be FREE or PRO.")
+        return
     target_id = message.from_user.id
     if len(parts) >= 3:
-        if not parts[2].isdigit() or int(parts[2]) <= 0:
+        parsed_target = parse_int(parts[2], min=1, max=2_147_483_647, default=None)
+        if parsed_target is None:
             await message.answer("Invalid user ID.")
             return
-        target_id = int(parts[2])
+        target_id = int(parsed_target)
     try:
-        set_plan(target_id, plan)
+        set_plan(target_id, str(plan))
     except ValueError:
         await message.answer("Plan must be FREE or PRO.")
         return

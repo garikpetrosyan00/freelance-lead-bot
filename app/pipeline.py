@@ -9,10 +9,11 @@ from typing import Iterable
 from aiogram import Bot
 
 from app.analytics import lead_id_from_lead, log_event
-from app.db import get_plan, get_skills, list_subscribed_users
+from app.db import get_plan, get_skills, list_subscribed_users, record_error
 from app.leads import Lead
 from app.matching import match_lead
 from app.notify import send_lead
+from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,19 @@ async def _dispatch_lead(bot: Bot, lead: Lead) -> int:
             )
             if await send_lead(bot, user_id, lead, result):
                 notified += 1
-        except Exception:
-            logger.exception("Failed to notify user %s", user_id)
+        except Exception as exc:
+            record_error(
+                "ingestion",
+                exc,
+                context={"user_id": user_id, "source": lead.source},
+            )
+            log_kv(
+                logger,
+                logging.WARNING,
+                "Dispatch failed for user",
+                user=mask_user_id(user_id),
+                error=safe_exc(exc),
+            )
     return notified
 
 

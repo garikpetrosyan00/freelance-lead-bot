@@ -6,17 +6,37 @@ import os
 import sqlite3
 import json
 import logging
+import time
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Iterable, List
+
+from app.ops.logging_utils import safe_exc, sanitize_meta
 
 DB_PATH = os.path.join("data", "app.db")
 DB_URI = False
 logger = logging.getLogger(__name__)
 _JSON_EXTRACT_SUPPORTED: bool | None = None
 
+# SQLite reliability defaults (WAL-oriented and safe for most bot workloads).
+SQLITE_PRAGMA_FOREIGN_KEYS = "ON"
+SQLITE_PRAGMA_JOURNAL_MODE = "WAL"
+SQLITE_PRAGMA_SYNCHRONOUS = "NORMAL"
+SQLITE_PRAGMA_BUSY_TIMEOUT_MS = 5000
+SQLITE_PRAGMA_TEMP_STORE = "MEMORY"
+SQLITE_PRAGMA_WAL_AUTOCHECKPOINT = 1000
+SQLITE_PRAGMA_JOURNAL_SIZE_LIMIT = 67_108_864
+STARTUP_BUSY_RETRIES = 3
+STARTUP_BUSY_SLEEP_SECONDS = 0.5
+ERROR_EVENT_MESSAGE_MAX_LEN = 300
+MAX_ERROR_CONTEXT_BYTES = 8192
+ERROR_DEDUPE_WINDOW_SECONDS = 300
+
 
 def _connect() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH, uri=DB_URI)
+    conn = sqlite3.connect(DB_PATH, uri=DB_URI)
+    _apply_sqlite_pragmas(conn)
+    return conn
 
 
 def configure_db(path: str, uri: bool | None = None) -> None:
@@ -28,8 +48,94 @@ def configure_db(path: str, uri: bool | None = None) -> None:
         DB_URI = bool(uri)
 
 
+def _apply_sqlite_pragmas(conn: sqlite3.Connection) -> None:
+    conn.execute(f"PRAGMA foreign_keys={SQLITE_PRAGMA_FOREIGN_KEYS}")
+    conn.execute(f"PRAGMA journal_mode={SQLITE_PRAGMA_JOURNAL_MODE}")
+    conn.execute(f"PRAGMA synchronous={SQLITE_PRAGMA_SYNCHRONOUS}")
+    conn.execute(f"PRAGMA busy_timeout={int(SQLITE_PRAGMA_BUSY_TIMEOUT_MS)}")
+    conn.execute(f"PRAGMA temp_store={SQLITE_PRAGMA_TEMP_STORE}")
+    conn.execute(f"PRAGMA wal_autocheckpoint={int(SQLITE_PRAGMA_WAL_AUTOCHECKPOINT)}")
+    conn.execute(f"PRAGMA journal_size_limit={int(SQLITE_PRAGMA_JOURNAL_SIZE_LIMIT)}")
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return bool(row)
+
+
+def run_startup_sanity_checks(required_tables: Iterable[str]) -> None:
+    if not DB_URI and DB_PATH != ":memory:":
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        with open(DB_PATH, "a", encoding="utf-8"):
+            pass
+
+    with _connect() as conn:
+        quick_check_rows = conn.execute("PRAGMA quick_check").fetchall()
+        quick_check_values = [str(row[0]).strip().lower() for row in quick_check_rows if row]
+        if not quick_check_values or any(value != "ok" for value in quick_check_values):
+            raise RuntimeError(f"PRAGMA quick_check failed: {quick_check_values or ['<empty>']}")
+        conn.execute("SELECT 1").fetchone()
+
+    for attempt in range(1, STARTUP_BUSY_RETRIES + 1):
+        try:
+            with _connect() as conn:
+                conn.execute("CREATE TEMP TABLE __startup_test(x INTEGER)")
+                conn.execute("DROP TABLE __startup_test")
+            break
+        except sqlite3.OperationalError as exc:
+            sqlite_code = getattr(exc, "sqlite_errorcode", None)
+            is_busy = sqlite_code == sqlite3.SQLITE_BUSY or "busy" in str(exc).lower()
+            if not is_busy:
+                raise
+            if attempt >= STARTUP_BUSY_RETRIES:
+                logger.warning(
+                    "DB startup write probe is still busy after %d attempts; continuing startup",
+                    STARTUP_BUSY_RETRIES,
+                    exc_info=True,
+                )
+                break
+            time.sleep(STARTUP_BUSY_SLEEP_SECONDS)
+
+    init_db()
+
+    with _connect() as conn:
+        missing = [table for table in required_tables if not _table_exists(conn, table)]
+    if missing:
+        raise RuntimeError(f"missing required DB tables: {', '.join(sorted(missing))}")
+
+
+def checkpoint_wal_passive() -> None:
+    try:
+        with _connect() as conn:
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    except Exception:
+        logger.warning("WAL passive checkpoint failed during shutdown", exc_info=True)
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def utc_day() -> str:
@@ -205,6 +311,18 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS error_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                component TEXT NOT NULL,
+                error_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                context_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
             ON upgrade_requests(status, created_at)
             """
@@ -261,6 +379,18 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_monitor_alerts_type_ts
             ON monitor_alerts(alert_type, ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_error_events_ts
+            ON error_events(ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_error_events_component_ts
+            ON error_events(component, ts)
             """
         )
         try:
@@ -1072,6 +1202,139 @@ def log_event(
             conn.commit()
     except Exception:
         logger.warning("Failed to write analytics event=%s", event, exc_info=True)
+
+
+def record_error(
+    component: str,
+    exc: BaseException,
+    context: dict[str, Any] | None = None,
+    ts: str | None = None,
+) -> None:
+    try:
+        timestamp = ts or _utc_now()
+        error_type = exc.__class__.__name__
+        message = safe_exc(exc)
+        if len(message) > ERROR_EVENT_MESSAGE_MAX_LEN:
+            message = message[:ERROR_EVENT_MESSAGE_MAX_LEN]
+
+        context_json = None
+        safe_context: dict[str, Any] = {}
+        if context:
+            safe_context = sanitize_meta(context)
+            encoded = json.dumps(safe_context, ensure_ascii=True, separators=(",", ":"))
+            if len(encoded.encode("utf-8")) <= MAX_ERROR_CONTEXT_BYTES:
+                context_json = encoded
+            else:
+                keys = [str(key) for key in safe_context.keys()]
+                keep = min(len(keys), 20)
+                fallback: dict[str, Any] = {}
+                while True:
+                    fallback = {
+                        "truncated": True,
+                        "keys": keys[:keep],
+                        "original_size": len(encoded.encode("utf-8")),
+                    }
+                    fallback_encoded = json.dumps(fallback, ensure_ascii=True, separators=(",", ":"))
+                    if len(fallback_encoded.encode("utf-8")) <= MAX_ERROR_CONTEXT_BYTES:
+                        context_json = fallback_encoded
+                        break
+                    if keep == 0:
+                        context_json = json.dumps(
+                            {"truncated": True, "original_size": len(encoded.encode("utf-8"))},
+                            ensure_ascii=True,
+                            separators=(",", ":"),
+                        )
+                        break
+                    keep -= 1
+
+        component_name = (component or "unknown").strip() or "unknown"
+        normalized_message = " ".join(message.strip().lower().split())[:120]
+        dedupe_key = f"{component_name}:{error_type}:{normalized_message}"
+        dedupe_hash = hashlib.sha1(dedupe_key.encode("utf-8")).hexdigest()
+        state_key = f"error:last_seen:{dedupe_hash}"
+        current_dt = _parse_iso_utc(timestamp) or datetime.now(timezone.utc)
+
+        with _connect() as conn:
+            existing = conn.execute(
+                "SELECT value FROM monitor_state WHERE key = ?",
+                (state_key,),
+            ).fetchone()
+            if existing and existing[0]:
+                last_seen_dt = _parse_iso_utc(str(existing[0]))
+                if last_seen_dt is not None:
+                    elapsed = (current_dt - last_seen_dt).total_seconds()
+                    if 0 <= elapsed < ERROR_DEDUPE_WINDOW_SECONDS:
+                        return
+
+            conn.execute(
+                """
+                INSERT INTO error_events (ts, component, error_type, message, context_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (timestamp, component_name, error_type, message, context_json),
+            )
+            conn.execute(
+                """
+                INSERT INTO monitor_state(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value=excluded.value,
+                    updated_at=excluded.updated_at
+                """,
+                (state_key, timestamp, _utc_now()),
+            )
+            conn.commit()
+    except Exception:
+        logger.warning("Failed to persist error telemetry for component=%s", component, exc_info=True)
+
+
+def get_recent_errors(limit: int = 10) -> list[dict[str, str]]:
+    safe_limit = max(1, min(int(limit), 30))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT ts, component, error_type, message
+            FROM error_events
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [
+        {
+            "ts": str(row[0]),
+            "component": str(row[1]),
+            "error_type": str(row[2]),
+            "message": str(row[3]),
+        }
+        for row in rows
+    ]
+
+
+def get_error_summary(since_iso: str, until_iso: str, limit: int = 10) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 50))
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT component, COUNT(*) AS c
+            FROM error_events
+            WHERE ts >= ? AND ts < ?
+            GROUP BY component
+            ORDER BY c DESC, component ASC
+            LIMIT ?
+            """,
+            (since_iso, until_iso, safe_limit),
+        ).fetchall()
+    return [{"component": str(row[0]), "count": int(row[1])} for row in rows]
+
+
+def get_error_count(since_iso: str, until_iso: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM error_events WHERE ts >= ? AND ts < ?",
+            (since_iso, until_iso),
+        ).fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
 
 
 def get_event_counts(event: str | None, since_iso: str, until_iso: str) -> dict[str, int]:

@@ -16,8 +16,10 @@ from app.db import (
     get_pending_upgrade_request_id,
     get_user_plan,
     get_user_settings,
+    record_error,
     upsert_payment_from_checkout,
 )
+from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
 from app.gating import FREE_DAILY_CAP
 
 router = Router()
@@ -81,8 +83,19 @@ async def handle_buy_pro(message: Message) -> None:
                 "mode": cfg.mode,
             },
         )
-    except Exception:
-        logger.exception("Failed to create checkout session for user_id=%s", user_id)
+    except Exception as exc:
+        record_error(
+            "billing",
+            exc,
+            context={"user_id": user_id, "request_id": request_id, "action": "create_checkout_session"},
+        )
+        log_kv(
+            logger,
+            logging.ERROR,
+            "Failed to create checkout session",
+            user=mask_user_id(user_id),
+            error=safe_exc(exc),
+        )
         await message.answer(
             "Could not create Stripe checkout right now. Please retry in a moment."
         )

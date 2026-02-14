@@ -17,7 +17,6 @@ from app.analytics.retention import (
     get_retention_7d_series,
     get_wau_series,
 )
-from app.config import is_admin
 from app.db import (
     get_block_reasons,
     get_event_counts,
@@ -28,13 +27,10 @@ from app.db import (
     get_score_buckets,
     get_source_stats,
 )
+from app.ops.auth import require_admin
+from app.ops.validation import parse_int
 
 router = Router()
-
-
-def _is_admin(message: Message) -> bool:
-    user = message.from_user
-    return bool(user and is_admin(user.id))
 
 
 def _pct(numerator: int, denominator: int) -> str:
@@ -48,12 +44,12 @@ def _parse_limit(command: CommandObject, default: int = 10) -> int:
     if not raw:
         return default
     parts = raw.split()
-    if len(parts) != 1 or not parts[0].isdigit():
+    if len(parts) != 1:
         raise ValueError
-    limit = int(parts[0])
-    if limit < 1 or limit > 50:
+    parsed = parse_int(parts[0], min=1, max=50, default=None)
+    if parsed is None:
         raise ValueError
-    return limit
+    return parsed
 
 
 def _series_window_utc(days: int) -> tuple[str, str]:
@@ -138,8 +134,7 @@ def _render_pro_health_30d_lines() -> list[str]:
 
 @router.message(Command("stats_today"))
 async def handle_stats_today(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     since_iso, until_iso = day_window_utc()
@@ -161,8 +156,7 @@ async def handle_stats_today(message: Message) -> None:
 
 @router.message(Command("stats_7d"))
 async def handle_stats_7d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     since_iso, until_iso = rolling_days_window_utc(7)
@@ -184,8 +178,7 @@ async def handle_stats_7d(message: Message) -> None:
 
 @router.message(Command("funnel_7d"))
 async def handle_funnel_7d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     since_iso, until_iso = rolling_days_window_utc(7)
@@ -215,8 +208,7 @@ async def handle_funnel_7d(message: Message) -> None:
 
 @router.message(Command("lead_quality_7d"))
 async def handle_lead_quality_7d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     since_iso, until_iso = rolling_days_window_utc(7)
@@ -237,8 +229,7 @@ async def handle_lead_quality_7d(message: Message) -> None:
 
 @router.message(Command("quality_7d"))
 async def handle_quality_7d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     since_iso, until_iso = rolling_days_window_utc(7)
@@ -273,8 +264,7 @@ async def handle_quality_7d(message: Message) -> None:
 
 @router.message(Command("blocks_7d"))
 async def handle_blocks_7d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     since_iso, until_iso = rolling_days_window_utc(7)
@@ -297,8 +287,7 @@ async def handle_blocks_7d(message: Message) -> None:
 
 @router.message(Command("sources_7d"))
 async def handle_sources_7d(message: Message, command: CommandObject) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     try:
@@ -323,8 +312,7 @@ async def handle_sources_7d(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("retention_7d"))
 async def handle_retention_7d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     lines = ["Retention (last 7d UTC):"]
@@ -334,8 +322,7 @@ async def handle_retention_7d(message: Message) -> None:
 
 @router.message(Command("retention_30d"))
 async def handle_retention_30d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     rows = _render_retention_lines(30)
@@ -377,8 +364,7 @@ async def handle_retention_30d(message: Message) -> None:
 
 @router.message(Command("pro_health_30d"))
 async def handle_pro_health_30d(message: Message) -> None:
-    if not _is_admin(message):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     await message.answer("\n".join(_render_pro_health_30d_lines()))

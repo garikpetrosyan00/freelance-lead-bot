@@ -18,7 +18,7 @@ from aiogram.exceptions import (
 from aiogram.types import Message
 
 from app.analytics import log_event
-from app.config import get_admin_user_ids, is_admin
+from app.config import get_admin_user_ids
 from app.db import (
     create_upgrade_request_with_state,
     decide_upgrade_request,
@@ -27,7 +27,10 @@ from app.db import (
     get_user_settings,
     list_pending_upgrade_requests,
     mark_user_pro,
+    record_error,
 )
+from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
+from app.ops.auth import require_admin
 from app.gating import FREE_DAILY_CAP
 
 router = Router()
@@ -36,10 +39,6 @@ logger = logging.getLogger(__name__)
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _is_admin(user_id: int) -> bool:
-    return is_admin(user_id)
 
 
 def _render_username(username: str | None) -> str:
@@ -72,8 +71,15 @@ async def _notify_admins(bot: Bot, text: str) -> None:
     for admin_id in admin_ids:
         try:
             await bot.send_message(chat_id=admin_id, text=text)
-        except Exception:
-            logger.exception("Failed to notify admin_id=%s about upgrade request", admin_id)
+        except Exception as exc:
+            record_error("admin", exc, context={"admin_id": admin_id, "action": "notify_upgrade_request"})
+            log_kv(
+                logger,
+                logging.WARNING,
+                "Failed to notify admin about upgrade request",
+                admin=mask_user_id(admin_id),
+                error=safe_exc(exc),
+            )
 
 
 async def _notify_user_or_log(bot: Bot, user_id: int, text: str) -> bool:
@@ -86,10 +92,17 @@ async def _notify_user_or_log(bot: Bot, user_id: int, text: str) -> bool:
         TelegramNetworkError,
         TelegramAPIError,
     ):
-        logger.warning("Failed to notify user_id=%s (blocked or invalid chat)", user_id)
+        logger.warning("Failed to notify user=%s (blocked or invalid chat)", mask_user_id(user_id))
         return False
-    except Exception:
-        logger.exception("Unexpected error sending message to user_id=%s", user_id)
+    except Exception as exc:
+        record_error("notify", exc, context={"user_id": user_id, "action": "upgrade_notify_user"})
+        log_kv(
+            logger,
+            logging.WARNING,
+            "Unexpected error sending message to user",
+            user=mask_user_id(user_id),
+            error=safe_exc(exc),
+        )
         return False
 
 
@@ -137,9 +150,7 @@ async def handle_request_pro(message: Message) -> None:
 
 @router.message(Command("pro_requests"))
 async def handle_pro_requests(message: Message, command: CommandObject) -> None:
-    user = message.from_user
-    if user is None or not _is_admin(user.id):
-        await message.answer("Unauthorized")
+    if not await require_admin(message):
         return
 
     limit = 50
@@ -174,8 +185,7 @@ async def handle_pro_requests(message: Message, command: CommandObject) -> None:
 @router.message(Command("approve_pro"))
 async def handle_approve_pro(message: Message, command: CommandObject) -> None:
     user = message.from_user
-    if user is None or not _is_admin(user.id):
-        await message.answer("Unauthorized")
+    if not await require_admin(message) or user is None:
         return
 
     args = (command.args or "").strip()
@@ -251,8 +261,7 @@ async def handle_approve_pro(message: Message, command: CommandObject) -> None:
 @router.message(Command("reject_pro"))
 async def handle_reject_pro(message: Message, command: CommandObject) -> None:
     user = message.from_user
-    if user is None or not _is_admin(user.id):
-        await message.answer("Unauthorized")
+    if not await require_admin(message) or user is None:
         return
 
     args = (command.args or "").strip()

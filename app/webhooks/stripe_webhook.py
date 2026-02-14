@@ -33,7 +33,9 @@ from app.db import (
     update_payment_status_by_subscription_id,
     upsert_payment_from_checkout,
     upsert_stripe_subscription,
+    record_error,
 )
+from app.ops.logging_utils import log_kv, mask_stripe_id, mask_user_id, safe_exc
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +105,15 @@ def _extract_request_id_from_metadata(metadata: dict[str, Any] | None) -> int | 
 async def _notify_user(bot: Bot, user_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id=user_id, text=text)
-    except Exception:
-        logger.exception("Failed to notify user_id=%s for Stripe event", user_id)
+    except Exception as exc:
+        record_error("notify", exc, context={"user_id": user_id, "action": "stripe_event_notify"})
+        log_kv(
+            logger,
+            logging.WARNING,
+            "Failed to notify user for Stripe event",
+            user=mask_user_id(user_id),
+            error=safe_exc(exc),
+        )
 
 
 def _auto_approve_upgrade_request(user_id: int, request_id: int | None, decided_at: str) -> None:
@@ -120,11 +129,13 @@ def _auto_approve_upgrade_request(user_id: int, request_id: int | None, decided_
         )
         return
     if int(request["user_id"]) != int(user_id):
-        logger.warning(
-            "Stripe auto-approve skipped: request_id=%s user mismatch request_user_id=%s event_user_id=%s",
-            target_request_id,
-            request["user_id"],
-            user_id,
+        log_kv(
+            logger,
+            logging.WARNING,
+            "Stripe auto-approve skipped due to user mismatch",
+            request_id=target_request_id,
+            request_user=mask_user_id(request["user_id"]),
+            event_user=mask_user_id(user_id),
         )
         return
     if str(request["status"]) != "pending":
@@ -376,7 +387,8 @@ def create_stripe_webhook_app(bot: Bot):
         try:
             event = stripe.Webhook.construct_event(payload, stripe_signature, webhook_secret)
         except Exception as exc:
-            logger.warning("Invalid Stripe webhook signature: %s", exc)
+            record_error("webhook", exc, context={"action": "stripe_signature_verify"})
+            log_kv(logger, logging.WARNING, "Invalid Stripe webhook signature", error=safe_exc(exc))
             return JSONResponse(status_code=400, content={"error": "invalid signature"})
 
         event_id = str(event.get("id") or "").strip()
@@ -390,9 +402,25 @@ def create_stripe_webhook_app(bot: Bot):
 
         try:
             await _dispatch_event(bot, event)
-        except Exception:
+        except Exception as exc:
             unmark_event_processed("stripe", event_id)
-            logger.exception("Failed processing Stripe event id=%s", event_id)
+            record_error(
+                "webhook",
+                exc,
+                context={
+                    "event_id": event_id,
+                    "event_type": str(event.get("type") or ""),
+                    "action": "dispatch_event",
+                },
+            )
+            log_kv(
+                logger,
+                logging.ERROR,
+                "Failed processing Stripe event",
+                event_id=mask_stripe_id(event_id),
+                event_type=str(event.get("type") or ""),
+                error=safe_exc(exc),
+            )
             return JSONResponse(status_code=500, content={"error": "processing failed"})
 
         return {"ok": True}

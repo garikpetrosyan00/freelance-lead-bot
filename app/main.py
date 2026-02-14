@@ -8,12 +8,12 @@ from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 
+from app import db
 from app.config import (
     enable_fake_ingestion,
     enable_telegram_ingestion,
     load_config,
 )
-from app.db import init_db
 from app.handlers import (
     analytics_admin_router,
     buy_pro_router,
@@ -31,8 +31,18 @@ from app.handlers import (
 )
 from app.ingestion.telegram_listener import run_telegram_listener
 from app.monitoring import run_monitor_loop
+from app.middlewares.rate_limit import RateLimitMiddleware
 from app.pipeline import run_fake_ingestion
 from app.webhooks import is_stripe_webhook_enabled, run_stripe_webhook_server
+
+BASE_CRITICAL_TABLES = (
+    "upgrade_requests",
+    "analytics_events",
+    "monitor_state",
+    "monitor_alerts",
+    "error_events",
+)
+STRIPE_CRITICAL_TABLES = ("payments", "processed_events")
 
 
 def configure_logging() -> None:
@@ -47,6 +57,7 @@ def _log_task_failure(task: asyncio.Task) -> None:
         return
     exc = task.exception()
     if exc is not None:
+        db.record_error("monitoring", exc, context={"phase": "background_task"})
         logging.getLogger(__name__).exception(
             "Background task crashed", exc_info=exc
         )
@@ -57,10 +68,20 @@ async def main() -> None:
     logger = logging.getLogger(__name__)
 
     token = load_config()
-    init_db()
+    stripe_webhook_enabled, _ = is_stripe_webhook_enabled()
+    required_tables = list(BASE_CRITICAL_TABLES)
+    if stripe_webhook_enabled:
+        required_tables.extend(STRIPE_CRITICAL_TABLES)
+    try:
+        db.run_startup_sanity_checks(required_tables)
+    except Exception as exc:
+        db.record_error("db", exc, context={"phase": "startup_sanity"})
+        logger.critical("DB startup sanity checks failed; refusing to start", exc_info=True)
+        raise SystemExit(1)
 
     bot = Bot(token=token)
     dp = Dispatcher()
+    dp.message.middleware(RateLimitMiddleware())
     dp.include_router(start_router)
     dp.include_router(skills_router)
     dp.include_router(test_lead_router)
@@ -87,7 +108,6 @@ async def main() -> None:
         tasks.append(telethon_task)
         logger.info("Telegram ingestion enabled")
 
-    stripe_webhook_enabled, _ = is_stripe_webhook_enabled()
     webhook_ready: asyncio.Event | None = asyncio.Event() if stripe_webhook_enabled else None
     webhook_task = asyncio.create_task(run_stripe_webhook_server(bot, ready=webhook_ready))
     webhook_task.add_done_callback(_log_task_failure)
@@ -135,6 +155,7 @@ async def main() -> None:
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
+        db.checkpoint_wal_passive()
         await bot.session.close()
         logger.info("Bot polling stopped")
 

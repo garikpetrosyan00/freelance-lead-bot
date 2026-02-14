@@ -19,8 +19,10 @@ from app.db import (
     get_upgrade_request_by_id,
     get_user_plan,
     mark_payment_paid_by_session,
+    record_error,
     upsert_stripe_subscription,
 )
+from app.ops.logging_utils import log_kv, mask_stripe_id, mask_user_id, safe_exc
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +40,7 @@ class ReconcileResult:
 
 
 def mask_id(value: str | None) -> str:
-    raw = (value or "").strip()
-    if not raw:
-        return "-"
-    if len(raw) <= 8:
-        return f"{raw[:2]}***"
-    return f"{raw[:8]}***{raw[-4:]}"
+    return mask_stripe_id(value)
 
 
 def stripe_reconcile_available() -> tuple[bool, str | None]:
@@ -88,9 +85,12 @@ def _maybe_auto_approve(user_id: int, request_id: int | None, note: str) -> None
     if request is None:
         return
     if int(request["user_id"]) != int(user_id):
-        logger.warning(
-            "Stripe reconcile skipped auto-approve request_id=%s due to user mismatch",
-            target_request_id,
+        log_kv(
+            logger,
+            logging.WARNING,
+            "Stripe reconcile skipped auto-approve due to user mismatch",
+            request_id=target_request_id,
+            user=mask_user_id(user_id),
         )
         return
     if str(request["status"]) != "pending":
@@ -260,8 +260,26 @@ def reconcile_user_payment(user_id: int, force: bool = False) -> ReconcileResult
                 changed=False,
                 message=f"Subscription status is {status}.",
             )
-    except Exception:
-        logger.exception("Stripe reconcile failed for user_id=%s", user_id)
+    except Exception as exc:
+        record_error(
+            "billing",
+            exc,
+            context={
+                "user_id": user_id,
+                "checkout_session_id": checkout_session_id,
+                "subscription_id": subscription_id,
+                "action": "reconcile_user_payment",
+            },
+        )
+        log_kv(
+            logger,
+            logging.ERROR,
+            "Stripe reconcile failed",
+            user=mask_user_id(user_id),
+            checkout_session_id=mask_stripe_id(checkout_session_id),
+            subscription_id=mask_stripe_id(subscription_id),
+            error=safe_exc(exc),
+        )
         return ReconcileResult(
             attempted=True,
             changed=False,
