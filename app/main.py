@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher
 
-from app import db
+from app.db import expire_overdue_pro_users, record_error
 from app.config import (
     enable_fake_ingestion,
     enable_telegram_ingestion,
@@ -43,6 +44,7 @@ BASE_CRITICAL_TABLES = (
     "error_events",
 )
 STRIPE_CRITICAL_TABLES = ("payments", "processed_events")
+PRO_EXPIRY_CHECK_INTERVAL_SECONDS = 5 * 60
 
 
 def configure_logging() -> None:
@@ -61,6 +63,31 @@ def _log_task_failure(task: asyncio.Task) -> None:
         logging.getLogger(__name__).exception(
             "Background task crashed", exc_info=exc
         )
+
+
+async def run_pro_expiry_loop(bot: Bot, interval_seconds: int = PRO_EXPIRY_CHECK_INTERVAL_SECONDS) -> None:
+    safe_interval = max(60, int(interval_seconds))
+    logger = logging.getLogger(__name__)
+    logger.info("PRO expiry loop started (interval=%ss)", safe_interval)
+    while True:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            downgraded_user_ids = expire_overdue_pro_users(now_iso)
+            for user_id in downgraded_user_ids:
+                try:
+                    await bot.send_message(chat_id=user_id, text="Your PRO subscription has expired.")
+                except Exception as exc:
+                    record_error(
+                        "billing",
+                        exc,
+                        context={"user_id": user_id, "action": "notify_pro_expired"},
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            record_error("billing", exc, context={"action": "expire_overdue_pro_users"})
+            logger.warning("PRO expiry loop iteration failed", exc_info=True)
+        await asyncio.sleep(safe_interval)
 
 
 async def main() -> None:
@@ -145,6 +172,10 @@ async def main() -> None:
     monitor_task = asyncio.create_task(run_monitor_loop(bot))
     monitor_task.add_done_callback(_log_task_failure)
     tasks.append(monitor_task)
+
+    expiry_task = asyncio.create_task(run_pro_expiry_loop(bot))
+    expiry_task.add_done_callback(_log_task_failure)
+    tasks.append(expiry_task)
 
     logger.info("Starting bot polling")
     try:

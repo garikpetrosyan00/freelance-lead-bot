@@ -8,7 +8,7 @@ import json
 import logging
 import time
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, List
 
 from app.ops.logging_utils import safe_exc, sanitize_meta
@@ -64,6 +64,14 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return bool(row)
+
+
+def _column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    for row in rows:
+        if len(row) > 1 and str(row[1]) == column_name:
+            return True
+    return False
 
 
 def run_startup_sanity_checks(required_tables: Iterable[str]) -> None:
@@ -176,6 +184,8 @@ def init_db() -> None:
             )
             """
         )
+        if not _column_exists(conn, "user_plan", "expires_at"):
+            conn.execute("ALTER TABLE user_plan ADD COLUMN expires_at TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS daily_usage (
@@ -538,18 +548,71 @@ def mark_user_pro(
     if target_plan not in {"FREE", "PRO"}:
         raise ValueError("plan must be FREE or PRO")
 
+    expires_at: str | None = None
+    if enabled:
+        activated_at = _parse_iso_utc(activated_at_iso)
+        if activated_at is None:
+            activated_at = datetime.now(timezone.utc)
+        expires_at = (activated_at + timedelta(days=30)).isoformat()
+
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO user_plan (user_id, plan, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO user_plan (user_id, plan, expires_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 plan=excluded.plan,
+                expires_at=excluded.expires_at,
                 updated_at=excluded.updated_at
             """,
-            (user_id, target_plan, activated_at_iso, activated_at_iso),
+            (user_id, target_plan, expires_at, activated_at_iso, activated_at_iso),
         )
         conn.commit()
+
+
+def get_user_plan_with_expiry(user_id: int) -> tuple[str, str | None]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT plan, expires_at FROM user_plan WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return "FREE", None
+    plan = str(row[0]).upper().strip() or "FREE"
+    expires_at = str(row[1]).strip() if row[1] else None
+    return plan, expires_at
+
+
+def expire_overdue_pro_users(now_iso: str) -> list[int]:
+    now_dt = _parse_iso_utc(now_iso) or datetime.now(timezone.utc)
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT user_id
+            FROM user_plan
+            WHERE plan = 'PRO'
+              AND expires_at IS NOT NULL
+              AND expires_at < ?
+            """,
+            (now_dt.isoformat(),),
+        ).fetchall()
+        user_ids = [int(row[0]) for row in rows]
+        if not user_ids:
+            return []
+        conn.execute(
+            """
+            UPDATE user_plan
+            SET plan = 'FREE',
+                expires_at = NULL,
+                updated_at = ?
+            WHERE plan = 'PRO'
+              AND expires_at IS NOT NULL
+              AND expires_at < ?
+            """,
+            (now_dt.isoformat(), now_dt.isoformat()),
+        )
+        conn.commit()
+    return user_ids
 
 
 def _upgrade_request_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
