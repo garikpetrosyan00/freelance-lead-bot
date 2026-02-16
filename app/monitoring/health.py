@@ -292,7 +292,17 @@ def get_health_snapshot() -> dict[str, Any]:
     last_ingested = get_last_event_ts("lead_ingested")
     snapshot["ingestion"]["last_ts"] = last_ingested
     ingested_minutes = _minutes_since(last_ingested)
-    if ingested_minutes is None or ingested_minutes > INGESTION_CRITICAL_MINUTES:
+    if ingested_minutes is None:
+        snapshot["ingestion"]["status"] = _worst(str(snapshot["ingestion"]["status"]), SEVERITY_INFO)
+        alerts.append(
+            _alert(
+                "ingestion_not_started",
+                SEVERITY_INFO,
+                "No lead_ingested yet (last: never).",
+                {"last_ts": last_ingested},
+            )
+        )
+    elif ingested_minutes > INGESTION_CRITICAL_MINUTES:
         snapshot["ingestion"]["status"] = _worst(str(snapshot["ingestion"]["status"]), SEVERITY_CRITICAL)
         alerts.append(
             _alert(

@@ -165,14 +165,15 @@ async def run_telegram_listener(bot: Bot) -> None:
             return
 
         lead = _build_lead(text, message)
-        log_event(
-            "lead_ingested",
-            lead_id=lead_id,
-            meta={"source": lead.source, "budget": lead.budget, "has_link": bool(lead.url)},
-        )
         logger.info("Telegram lead received: %s", lead.title)
         try:
             notified = await _dispatch_lead(bot, lead)
+            ingested_lead_id = lead_id_from_lead(lead)
+            log_event(
+                "lead_ingested",
+                lead_id=ingested_lead_id,
+                meta={"source": lead.source, "budget": lead.budget, "has_link": bool(lead.url)},
+            )
             logger.info("Telegram lead sent to %s users", notified)
         except Exception as exc:
             record_error(
