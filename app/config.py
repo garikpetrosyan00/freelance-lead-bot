@@ -152,3 +152,11 @@ def get_stripe_cancel_path() -> str:
     if not value.startswith("/"):
         value = f"/{value}"
     return value
+
+
+def get_lemon_checkout_url() -> str:
+    return os.getenv("LEMON_CHECKOUT_URL", "").strip()
+
+
+def get_lemon_webhook_secret() -> str:
+    return os.getenv("LEMONSQUEEZY_WEBHOOK_SECRET", "").strip()

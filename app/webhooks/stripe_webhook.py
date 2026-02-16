@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -12,6 +15,7 @@ from aiogram import Bot
 
 from app.analytics import log_event
 from app.config import (
+    get_lemon_webhook_secret,
     get_stripe_secret_key,
     get_stripe_webhook_secret,
     get_webhook_host,
@@ -352,98 +356,229 @@ async def _dispatch_event(bot: Bot, event: dict[str, Any]) -> None:
     logger.info("Unhandled Stripe event type=%s", event_type)
 
 
-def create_stripe_webhook_app(bot: Bot):
-    enabled, reason = is_stripe_webhook_enabled()
-    if not enabled:
-        raise RuntimeError(reason or "Stripe webhook is not configured")
-    if FastAPI is None or stripe is None:
-        raise RuntimeError("Stripe webhook dependencies are unavailable")
+def create_webhook_app(bot: Bot):
+    if FastAPI is None:
+        raise RuntimeError("Webhook dependencies are unavailable")
 
-    secret_key = get_stripe_secret_key()
-    webhook_secret = get_stripe_webhook_secret()
-    if not secret_key or not webhook_secret:
-        raise RuntimeError("Stripe webhook is not configured")
-
-    stripe.api_key = secret_key
     app = FastAPI()
 
-    @app.get("/stripe/success")
-    async def stripe_success(session_id: str | None = None):  # type: ignore[no-redef]
-        return {"ok": True, "message": "Payment completed. You can return to Telegram.", "session_id": session_id}
+    stripe_enabled, _ = is_stripe_webhook_enabled()
+    if stripe_enabled:
+        webhook_secret = get_stripe_webhook_secret()
+        secret_key = get_stripe_secret_key()
+        if stripe is None:
+            raise RuntimeError("stripe dependency is missing")
+        if stripe is not None and secret_key:
+            stripe.api_key = secret_key
 
-    @app.get("/stripe/cancel")
-    async def stripe_cancel():  # type: ignore[no-redef]
-        return {"ok": True, "message": "Payment canceled. You can retry /buy_pro in Telegram."}
+        @app.get("/stripe/success")
+        async def stripe_success(session_id: str | None = None):  # type: ignore[no-redef]
+            return {"ok": True, "message": "Payment completed. You can return to Telegram.", "session_id": session_id}
 
-    @app.post("/webhooks/stripe")
-    async def stripe_webhook(  # type: ignore[no-redef]
-        request: Request,
-        stripe_signature: str | None = Header(default=None, alias="stripe-signature"),
-    ):
-        payload = await request.body()
-        if not stripe_signature:
-            return JSONResponse(status_code=400, content={"error": "missing stripe-signature"})
+        @app.get("/stripe/cancel")
+        async def stripe_cancel():  # type: ignore[no-redef]
+            return {"ok": True, "message": "Payment canceled. You can retry /buy_pro in Telegram."}
 
-        try:
-            event = stripe.Webhook.construct_event(payload, stripe_signature, webhook_secret)
-        except Exception as exc:
-            record_error("webhook", exc, context={"action": "stripe_signature_verify"})
-            log_kv(logger, logging.WARNING, "Invalid Stripe webhook signature", error=safe_exc(exc))
-            return JSONResponse(status_code=400, content={"error": "invalid signature"})
+        @app.post("/webhooks/stripe")
+        async def stripe_webhook(  # type: ignore[no-redef]
+            request: Request,
+            stripe_signature: str | None = Header(default=None, alias="stripe-signature"),
+        ):
+            payload = await request.body()
+            if not stripe_signature:
+                return JSONResponse(status_code=400, content={"error": "missing stripe-signature"})
 
-        event_id = str(event.get("id") or "").strip()
-        if not event_id:
-            logger.warning("Stripe webhook without event id")
+            try:
+                event = stripe.Webhook.construct_event(payload, stripe_signature, webhook_secret)
+            except Exception as exc:
+                record_error("webhook", exc, context={"action": "stripe_signature_verify"})
+                log_kv(logger, logging.WARNING, "Invalid Stripe webhook signature", error=safe_exc(exc))
+                return JSONResponse(status_code=400, content={"error": "invalid signature"})
+
+            event_id = str(event.get("id") or "").strip()
+            if not event_id:
+                logger.warning("Stripe webhook without event id")
+                return {"ok": True}
+
+            first_seen = mark_event_processed("stripe", event_id)
+            if not first_seen:
+                return {"ok": True, "duplicate": True}
+
+            try:
+                await _dispatch_event(bot, event)
+            except Exception as exc:
+                unmark_event_processed("stripe", event_id)
+                record_error(
+                    "webhook",
+                    exc,
+                    context={
+                        "event_id": event_id,
+                        "event_type": str(event.get("type") or ""),
+                        "action": "dispatch_event",
+                    },
+                )
+                log_kv(
+                    logger,
+                    logging.ERROR,
+                    "Failed processing Stripe event",
+                    event_id=mask_stripe_id(event_id),
+                    event_type=str(event.get("type") or ""),
+                    error=safe_exc(exc),
+                )
+                return JSONResponse(status_code=500, content={"error": "processing failed"})
+
             return {"ok": True}
 
-        first_seen = mark_event_processed("stripe", event_id)
-        if not first_seen:
-            return {"ok": True, "duplicate": True}
+    @app.post("/webhooks/lemon")
+    async def lemon_webhook(  # type: ignore[no-redef]
+        request: Request,
+        signature: str | None = Header(default=None, alias="X-Signature"),
+        event_name: str | None = Header(default=None, alias="X-Event-Name"),
+    ):
+        payload = await request.body()
+        if not signature or not event_name:
+            return JSONResponse(status_code=400, content={"error": "missing required headers"})
 
+        secret = get_lemon_webhook_secret()
+        if not secret:
+            return JSONResponse(status_code=500, content={"error": "LEMONSQUEEZY_WEBHOOK_SECRET not configured"})
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature.strip(), expected):
+            return JSONResponse(status_code=401, content={"error": "invalid signature"})
+
+        event_key = ""
         try:
-            await _dispatch_event(bot, event)
+            payload_obj = json.loads(payload.decode("utf-8"))
+            if not isinstance(payload_obj, dict):
+                payload_obj = {}
+
+            data_obj = payload_obj.get("data") or {}
+            if not isinstance(data_obj, dict):
+                data_obj = {}
+            subscription_id = str(data_obj.get("id") or "").strip()
+            if not subscription_id:
+                return JSONResponse(status_code=400, content={"error": "missing subscription id"})
+
+            attributes = data_obj.get("attributes") or {}
+            if not isinstance(attributes, dict):
+                attributes = {}
+            updated_at = attributes.get("updated_at") or attributes.get("created_at")
+
+            meta_obj = payload_obj.get("meta") or {}
+            if not isinstance(meta_obj, dict):
+                meta_obj = {}
+            custom_data = meta_obj.get("custom_data") or {}
+            if not isinstance(custom_data, dict):
+                custom_data = {}
+            telegram_user_id = custom_data.get("telegram_user_id")
+
+            event_key = f"lemon:{event_name}:{subscription_id}:{updated_at or 'na'}"
+            first_seen = mark_event_processed("lemon", event_key)
+            if not first_seen:
+                return {"ok": True, "duplicate": True}
+
+            if event_name == "subscription_created":
+                try:
+                    user_id = int(telegram_user_id)
+                except (TypeError, ValueError):
+                    unmark_event_processed("lemon", event_key)
+                    return JSONResponse(status_code=400, content={"error": "missing telegram_user_id"})
+
+                activate_pro_for_user(
+                    user_id=user_id,
+                    reason="lemon_subscription_created",
+                    activated_at_iso=_utc_now_iso(),
+                )
+                return {"ok": True}
+
+            if event_name == "subscription_cancelled":
+                try:
+                    user_id = int(telegram_user_id)
+                except (TypeError, ValueError):
+                    unmark_event_processed("lemon", event_key)
+                    return JSONResponse(status_code=400, content={"error": "missing telegram_user_id"})
+
+                log_event(
+                    "subscription_cancelled",
+                    user_id=user_id,
+                    plan="PRO",
+                    meta={"provider": "lemon", "subscription_id": subscription_id},
+                    ts=_utc_now_iso(),
+                )
+                return {"ok": True}
+
+            if event_name == "subscription_expired":
+                try:
+                    user_id = int(telegram_user_id)
+                except (TypeError, ValueError):
+                    unmark_event_processed("lemon", event_key)
+                    return JSONResponse(status_code=400, content={"error": "missing telegram_user_id"})
+
+                downgrade_user_to_free(
+                    user_id=user_id,
+                    reason="lemon_subscription_expired",
+                    updated_at_iso=_utc_now_iso(),
+                )
+                log_event(
+                    "pro_downgraded",
+                    user_id=user_id,
+                    plan="FREE",
+                    meta={"reason": "lemon_expired", "subscription_id": subscription_id},
+                    ts=_utc_now_iso(),
+                )
+                return {"ok": True}
+
+            return {"ok": True, "ignored": True}
         except Exception as exc:
-            unmark_event_processed("stripe", event_id)
+            if event_key:
+                unmark_event_processed("lemon", event_key)
             record_error(
                 "webhook",
                 exc,
                 context={
-                    "event_id": event_id,
-                    "event_type": str(event.get("type") or ""),
-                    "action": "dispatch_event",
+                    "provider": "lemon",
+                    "event_key": event_key,
+                    "event_name": event_name or "",
+                    "action": "lemon_dispatch_event",
                 },
             )
             log_kv(
                 logger,
                 logging.ERROR,
-                "Failed processing Stripe event",
-                event_id=mask_stripe_id(event_id),
-                event_type=str(event.get("type") or ""),
+                "Failed processing Lemon event",
+                event_key=event_key,
+                event_name=event_name or "",
                 error=safe_exc(exc),
             )
             return JSONResponse(status_code=500, content={"error": "processing failed"})
 
-        return {"ok": True}
-
     return app
 
 
-async def run_stripe_webhook_server(bot: Bot, ready: asyncio.Event | None = None) -> None:
-    enabled, reason = is_stripe_webhook_enabled()
-    if not enabled:
-        logger.info("Stripe webhook server disabled: %s", reason)
-        return
-    if uvicorn is None:
-        logger.info("Stripe webhook server disabled: uvicorn missing")
+async def run_webhook_server(bot: Bot, ready: asyncio.Event | None = None) -> None:
+    stripe_enabled, stripe_reason = is_stripe_webhook_enabled()
+    lemon_enabled = bool(get_lemon_webhook_secret())
+
+    if FastAPI is None or uvicorn is None:
+        logger.info("Webhook server disabled: fastapi/uvicorn dependencies are missing")
         return
 
-    app = create_stripe_webhook_app(bot)
+    logger.info(
+        "Webhook routes: stripe=%s lemon=%s",
+        "enabled" if stripe_enabled else f"disabled ({stripe_reason or 'not configured'})",
+        "enabled" if lemon_enabled else "disabled (LEMONSQUEEZY_WEBHOOK_SECRET not configured)",
+    )
+    if not stripe_enabled and not lemon_enabled:
+        logger.info("Webhook server disabled: no webhook providers configured")
+        return
+
+    app = create_webhook_app(bot)
     host = get_webhook_host()
     port = get_webhook_port()
     config = uvicorn.Config(app=app, host=host, port=port, log_level="info")
     server = uvicorn.Server(config)
 
-    logger.info("Starting Stripe webhook server on %s:%s", host, port)
+    logger.info("Starting webhook server on %s:%s", host, port)
     server_task = asyncio.create_task(server.serve())
     startup_ready = False
     try:
@@ -456,7 +591,7 @@ async def run_stripe_webhook_server(bot: Bot, ready: asyncio.Event | None = None
             if server_task.done():
                 # Startup failed before server reported ready.
                 await server_task
-                raise RuntimeError("Stripe webhook server exited before reporting ready")
+                raise RuntimeError("Webhook server exited before reporting ready")
             await asyncio.sleep(0.05)
 
         await server_task
@@ -470,3 +605,7 @@ async def run_stripe_webhook_server(bot: Bot, ready: asyncio.Event | None = None
             server_task.cancel()
         with suppress(BaseException):
             await server_task
+
+
+async def run_stripe_webhook_server(bot: Bot, ready: asyncio.Event | None = None) -> None:
+    await run_webhook_server(bot, ready=ready)

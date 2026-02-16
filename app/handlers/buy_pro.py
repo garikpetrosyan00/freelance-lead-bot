@@ -1,44 +1,26 @@
-"""Stripe-powered PRO purchase command."""
+"""Lemon Squeezy-powered PRO purchase command."""
 
 from __future__ import annotations
 
-import json
-import logging
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.analytics import log_event
-from app.billing import create_checkout_session, get_stripe_checkout_config
-from app.db import (
-    create_upgrade_request_with_state,
-    get_pending_upgrade_request_id,
-    get_user_plan,
-    get_user_settings,
-    record_error,
-    upsert_payment_from_checkout,
-)
-from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
-from app.gating import FREE_DAILY_CAP
+from app.config import get_lemon_checkout_url
 
 router = Router()
-logger = logging.getLogger(__name__)
 
 
-def _settings_snapshot_json(user_id: int, username: str | None) -> str:
-    plan = get_user_plan(user_id)
-    min_level, user_cap = get_user_settings(user_id)
-    return json.dumps(
-        {
-            "plan": plan,
-            "min_level": min_level,
-            "daily_cap": user_cap,
-            "free_daily_cap": FREE_DAILY_CAP,
-            "username": username,
-        },
-        ensure_ascii=True,
-    )
+def _build_lemon_checkout_url(base_url: str, telegram_user_id: int, username: str | None) -> str:
+    split = urlsplit(base_url)
+    query_pairs = parse_qsl(split.query, keep_blank_values=True)
+    query_pairs.append(("checkout[custom][telegram_user_id]", str(telegram_user_id)))
+    if username:
+        query_pairs.append(("checkout[custom][username]", username))
+    query = urlencode(query_pairs)
+    return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
 
 
 @router.message(Command("buy_pro"))
@@ -48,66 +30,22 @@ async def handle_buy_pro(message: Message) -> None:
         await message.answer("Unable to identify user.")
         return
 
-    cfg = get_stripe_checkout_config()
-    if not cfg.enabled:
-        reason = cfg.reason or "Stripe checkout is unavailable right now."
+    base_checkout_url = get_lemon_checkout_url()
+    if not base_checkout_url:
         await message.answer(
-            f"/buy_pro is temporarily unavailable. {reason}\n"
-            "You can still use /upgrade and /request_pro for manual activation."
+            "/buy_pro is temporarily unavailable. Payment link is not configured right now.\n"
+            "Please contact support and try again soon."
         )
         return
 
-    user_id = user.id
-    username = f"@{user.username}" if user.username else None
-
-    request_id = get_pending_upgrade_request_id(user_id)
-    if request_id is None:
-        snapshot = _settings_snapshot_json(user_id, username)
-        request_id, _ = create_upgrade_request_with_state(
-            user_id=user_id,
-            username=username,
-            settings_snapshot_json=snapshot,
-            paid=0,
-        )
-
-    try:
-        session = create_checkout_session(user_id=user_id, username=username, request_id=request_id)
-        upsert_payment_from_checkout(session)
-        log_event(
-            "checkout_created",
-            user_id=user_id,
-            plan=get_user_plan(user_id),
-            meta={
-                "checkout_session_id": str(session.get("id") or ""),
-                "request_id": request_id,
-                "mode": cfg.mode,
-            },
-        )
-    except Exception as exc:
-        record_error(
-            "billing",
-            exc,
-            context={"user_id": user_id, "request_id": request_id, "action": "create_checkout_session"},
-        )
-        log_kv(
-            logger,
-            logging.ERROR,
-            "Failed to create checkout session",
-            user=mask_user_id(user_id),
-            error=safe_exc(exc),
-        )
-        await message.answer(
-            "Could not create Stripe checkout right now. Please retry in a moment."
-        )
-        return
-
-    checkout_url = str(session.get("url") or "").strip()
-    if not checkout_url:
-        await message.answer("Checkout session created but URL is missing. Please contact support.")
-        return
+    checkout_url = _build_lemon_checkout_url(
+        base_url=base_checkout_url,
+        telegram_user_id=user.id,
+        username=user.username,
+    )
 
     await message.answer(
-        "Open this secure Stripe checkout URL to activate PRO:\n"
+        "Open this secure checkout URL to activate PRO:\n"
         f"{checkout_url}\n\n"
         "After payment, activation is automatic."
     )
