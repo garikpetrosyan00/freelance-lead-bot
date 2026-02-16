@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher
 
+from app import db
 from app.db import expire_overdue_pro_users, record_error
 from app.config import (
     enable_fake_ingestion,
@@ -25,6 +26,7 @@ from app.handlers import (
     plan_router,
     settings_router,
     skills_router,
+    skills_picker_router,
     start_router,
     subscription_router,
     test_lead_router,
@@ -111,6 +113,7 @@ async def main() -> None:
     dp.message.middleware(RateLimitMiddleware())
     dp.include_router(start_router)
     dp.include_router(skills_router)
+    dp.include_router(skills_picker_router)
     dp.include_router(test_lead_router)
     dp.include_router(subscription_router)
     dp.include_router(plan_router)
