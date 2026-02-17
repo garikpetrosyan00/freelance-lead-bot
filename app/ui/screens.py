@@ -59,9 +59,23 @@ def start_kb() -> InlineKeyboardMarkup:
 
 
 def home_kb(plan: str) -> InlineKeyboardMarkup:
-    _ = plan  # Kept for future plan-specific variations without changing call sites.
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    plan_upper = (plan or "").upper().strip()
+    if plan_upper == "PRO":
+        rows = [
+            [
+                InlineKeyboardButton(text="⚙️ Settings", callback_data="ui:settings"),
+                InlineKeyboardButton(text="📌 Skills", callback_data="ui:skills"),
+            ],
+            [
+                InlineKeyboardButton(text="🔎 Test lead", callback_data="ui:test_lead"),
+                InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
+            ],
+            [
+                InlineKeyboardButton(text="ℹ️ Help", callback_data="ui:help"),
+            ],
+        ]
+    else:
+        rows = [
             [
                 InlineKeyboardButton(text="💳 Upgrade", callback_data="ui:upgrade"),
                 InlineKeyboardButton(text="⚙️ Settings", callback_data="ui:settings"),
@@ -72,14 +86,21 @@ def home_kb(plan: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
-                InlineKeyboardButton(text="💳 Upgrade", callback_data="ui:upgrade"),
-            ],
-            [
-                InlineKeyboardButton(text="⚙️ Settings", callback_data="ui:settings"),
                 InlineKeyboardButton(text="ℹ️ Help", callback_data="ui:help"),
             ],
         ]
-    )
+    _assert_unique_home_buttons(rows)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _assert_unique_home_buttons(rows: list[list[InlineKeyboardButton]]) -> None:
+    seen: set[str] = set()
+    for row in rows:
+        for button in row:
+            key = f"{button.callback_data}|{button.text}"
+            if key in seen:
+                raise AssertionError(f"Duplicate home button detected: {key}")
+            seen.add(key)
 
 
 def back_home_kb() -> InlineKeyboardMarkup:
