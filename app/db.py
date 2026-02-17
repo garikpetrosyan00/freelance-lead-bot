@@ -1912,21 +1912,3 @@ def set_user_min_level(user_id: int, min_level: str) -> None:
         )
         conn.commit()
 
-
-def set_user_daily_cap(user_id: int, daily_cap: int | None) -> None:
-    if daily_cap is not None and daily_cap <= 0:
-        raise ValueError("daily_cap must be a positive integer or None")
-    now = _utc_now()
-    with _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO user_settings (user_id, min_level, daily_cap, updated_at)
-            VALUES (?, 'MEDIUM', ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                min_level=user_settings.min_level,
-                daily_cap=excluded.daily_cap,
-                updated_at=excluded.updated_at
-            """,
-            (user_id, daily_cap, now),
-        )
-        conn.commit()

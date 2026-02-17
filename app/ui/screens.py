@@ -17,11 +17,11 @@ def _fmt_usage_value(value: Any) -> str:
     return "—"
 
 
-def _fmt_cap(value: Any, plan: str) -> str:
+def _fmt_daily_limit(value: Any, plan: str) -> str:
     if isinstance(value, int):
         return str(value)
     if plan == "PRO":
-        return "unlimited"
+        return "Unlimited"
     return "—"
 
 
@@ -32,12 +32,12 @@ def home_text(user: User, plan: str, usage_summary: dict[str, Any] | None) -> st
     min_level = str(summary.get("min_level") or "—").upper()
     today_sent = _fmt_usage_value(summary.get("today_sent"))
     today_blocked = _fmt_usage_value(summary.get("today_blocked"))
-    cap = _fmt_cap(summary.get("cap"), plan)
+    daily_limit = _fmt_daily_limit(summary.get("daily_limit"), plan_upper)
     lines = [
         "🏠 Home Dashboard",
         f"Plan: {plan_label}",
         f"Min level: {min_level}",
-        f"Cap: {cap}",
+        f"Daily lead limit: {daily_limit}",
         f"Today usage: {today_sent} sent / {today_blocked} blocked",
     ]
     if plan_upper == "PRO" and min_level == "LOW":

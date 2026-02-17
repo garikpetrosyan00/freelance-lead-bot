@@ -88,8 +88,8 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
     match_level = match.get("level", "NONE")
     day = utc_day()
     sent_today = get_daily_usage(user_id, day)
-    min_level, user_cap = get_user_settings(user_id)
-    cap = effective_cap(plan, user_cap)
+    min_level, _ = get_user_settings(user_id)
+    cap = effective_cap(plan, None)
     allowed, reason = can_send_notification(
         plan, match_level, sent_today, min_level, cap
     )

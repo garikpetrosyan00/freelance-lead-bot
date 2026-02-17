@@ -29,10 +29,10 @@ def _clear_picker_awaiting_custom(user_id: int) -> None:
 
 def _effective_display_settings(user_id: int) -> tuple[str, str, int | None]:
     plan = db.get_plan(user_id)
-    min_level, user_cap = db.get_user_settings(user_id)
+    min_level, _ = db.get_user_settings(user_id)
     if plan == "FREE":
         return plan, "MEDIUM", FREE_DAILY_CAP
-    return plan, min_level, effective_cap(plan, user_cap)
+    return plan, min_level, effective_cap(plan, None)
 
 
 async def _render_settings(
@@ -46,18 +46,18 @@ async def _render_settings(
     chat_id = callback.message.chat.id if isinstance(callback.message, Message) else user_id
     if isinstance(callback.message, Message):
         UI_MESSAGE_ID[user_id] = callback.message.message_id
-    plan, min_level, cap = _effective_display_settings(user_id)
+    plan, min_level, daily_limit = _effective_display_settings(user_id)
     text = settings_text(
         callback.from_user,
         plan,
         min_level,
-        cap,
+        daily_limit,
         saved=saved,
         locked_hint=locked_hint,
     )
     if notice:
         text = f"{text}\n\n{notice}"
-    markup = settings_kb(plan, min_level, cap)
+    markup = settings_kb(plan, min_level, daily_limit)
     await render_ui_message(
         callback.bot,
         chat_id=chat_id,
@@ -100,31 +100,3 @@ async def handle_set_min(callback: CallbackQuery) -> None:
         else:
             await callback.answer()
 
-
-@router.callback_query(F.data.startswith("set:cap:"))
-async def handle_set_cap(callback: CallbackQuery) -> None:
-    try:
-        _seed_ui_anchor(callback)
-        user_id = callback.from_user.id
-        plan = db.get_plan(user_id)
-        raw = (callback.data or "").split("set:cap:", 1)[1].strip().lower()
-        if raw == "unlimited":
-            value = None
-        elif raw.isdigit() and int(raw) in {5, 10, 20, 50}:
-            value = int(raw)
-        else:
-            await _render_settings(callback, notice="Invalid cap option.")
-            return
-
-        if plan != "PRO":
-            await _render_settings(callback, locked_hint=True)
-            return
-
-        db.set_user_daily_cap(user_id, value)
-        await _render_settings(callback, saved=True)
-    finally:
-        plan = db.get_plan(callback.from_user.id)
-        if plan != "PRO":
-            await callback.answer("PRO only")
-        else:
-            await callback.answer()

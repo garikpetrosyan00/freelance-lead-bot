@@ -95,7 +95,7 @@ def _teaser_text(lead: Lead, match_level: str) -> str:
         f"🔒 Lead locked ({match_level})\n"
         f"Title: {title}\n"
         f"Preview: {preview}\n"
-        "Upgrade to PRO to unlock LOW leads & higher caps."
+        "Upgrade to PRO to unlock LOW leads and unlimited daily leads."
     )
 
 

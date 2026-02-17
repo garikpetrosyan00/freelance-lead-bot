@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-FREE_DAILY_CAP = 5
+FREE_DAILY_CAP = 3
 
 
 def allowed_match_levels(plan: str) -> set[str]:
@@ -18,10 +18,14 @@ def level_rank(level: str) -> int:
 
 
 def effective_cap(plan: str, user_cap: int | None) -> int | None:
+    _ = user_cap  # daily cap is fixed by plan in the simplified model
     plan = plan.upper().strip()
+    cap = None if plan == "PRO" else FREE_DAILY_CAP
     if plan == "FREE":
-        return FREE_DAILY_CAP
-    return user_cap
+        assert cap == FREE_DAILY_CAP == 3
+    if plan == "PRO":
+        assert cap is None
+    return cap
 
 
 def passes_min_level(match_level: str, min_level: str) -> bool:

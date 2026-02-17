@@ -8,7 +8,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app import db
 from app.analytics import log_event
 from app.billing.stripe_checkout import create_checkout_session
-from app.gating import effective_cap
 from app.handlers.plan import render_upgrade_text
 from app.handlers.test_lead import handle_test_lead
 from app.ops.usage import get_usage_summary
@@ -44,11 +43,11 @@ def _value_or_dash(value: int | None) -> str:
     return "—"
 
 
-def _cap_text(cap: int | None, plan: str | None) -> str:
-    if isinstance(cap, int):
-        return str(cap)
+def _daily_limit_text(daily_limit: int | None, plan: str | None) -> str:
+    if isinstance(daily_limit, int):
+        return str(daily_limit)
     if plan == "PRO":
-        return "unlimited"
+        return "Unlimited"
     return "—"
 
 
@@ -101,12 +100,9 @@ async def handle_ui_home(callback: CallbackQuery) -> None:
         _clear_picker_awaiting_custom(user.id)
         usage = await get_usage_summary(db, user.id)
         plan = str(usage.get("plan") or db.get_plan(user.id))
-        min_level, user_cap = db.get_user_settings(user.id)
+        min_level, _ = db.get_user_settings(user.id)
         effective_min_level = "MEDIUM" if plan == "FREE" else min_level
         usage["min_level"] = str(usage.get("min_level") or effective_min_level)
-        usage["cap"] = usage.get("cap")
-        if usage["cap"] is None:
-            usage["cap"] = effective_cap(plan, user_cap)
         text = home_text(user, plan, usage)
         await _edit_or_send(callback, text, reply_markup=home_kb(plan))
     finally:
@@ -139,16 +135,16 @@ async def handle_ui_usage(callback: CallbackQuery) -> None:
         today_blocked = _value_or_dash(usage.get("today_blocked"))
         week_sent = _value_or_dash(usage.get("week_sent"))
         week_blocked = _value_or_dash(usage.get("week_blocked"))
-        cap_text = _cap_text(usage.get("cap"), plan)
+        daily_limit_text = _daily_limit_text(usage.get("daily_limit"), plan)
 
         lines = [
             f"Plan: {plan}",
             f"Min level: {min_level}",
-            f"Today: {today_sent} sent / {today_blocked} blocked • Cap: {cap_text}",
+            f"Today: {today_sent} sent / {today_blocked} blocked • Daily limit: {daily_limit_text}",
             f"Last 7 days: {week_sent} sent / {week_blocked} blocked",
         ]
         if plan == "FREE":
-            lines.append("Upgrade to PRO to increase cap / unlock lower matches.")
+            lines.append("Upgrade to PRO for unlimited daily leads and LOW matches.")
         elif today_sent == "—" and today_blocked == "—" and week_sent == "—" and week_blocked == "—":
             lines.append("No usage data yet.")
         text = "\n".join(lines)

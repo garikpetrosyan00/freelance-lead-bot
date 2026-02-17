@@ -22,16 +22,15 @@ def render_upgrade_text() -> str:
         "PRO benefits:",
         "- LOW alerts",
         "- Custom min level",
-        "- Custom daily cap",
+        "- Unlimited daily leads",
         "- Faster cooldown",
-        "- Unlimited cap (if configured)",
     ]
     if payment_link:
         lines.append(f"Pay here: {payment_link}")
     else:
         lines.append("Payment link coming soon.")
     lines.append(f"After payment, message {contact} with your /my_id.")
-    lines.append("Daily cap is based on UTC day.")
+    lines.append("Daily lead limit resets by UTC day.")
     return "\n".join(lines)
 
 
@@ -47,7 +46,9 @@ async def handle_plan(message: Message) -> None:
         f"Allowed: {allowed}",
     ]
     if plan == "FREE":
-        lines.append(f"Daily cap (UTC): {FREE_DAILY_CAP}")
+        lines.append(f"Daily lead limit: {FREE_DAILY_CAP}")
+    else:
+        lines.append("Daily lead limit: Unlimited")
     lines.append(f"Used today: {used}")
     lines.append("Tip: /buy_pro for Stripe checkout, or /upgrade for manual flow")
     await message.answer("\n".join(lines))

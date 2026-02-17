@@ -49,12 +49,12 @@ def _render_username(username: str | None) -> str:
 
 def _settings_snapshot_json(user_id: int, username: str | None) -> str:
     plan = get_user_plan(user_id)
-    min_level, user_cap = get_user_settings(user_id)
+    min_level, _ = get_user_settings(user_id)
     return json.dumps(
         {
             "plan": plan,
             "min_level": min_level,
-            "daily_cap": user_cap,
+            "daily_limit": None if plan == "PRO" else FREE_DAILY_CAP,
             "free_daily_cap": FREE_DAILY_CAP,
             "username": username,
         },
@@ -247,7 +247,7 @@ async def handle_approve_pro(message: Message, command: CommandObject) -> None:
         int(request["user_id"]),
         "Your PRO has been activated.\n"
         "Use /settings to view your limits.\n"
-        "PRO includes faster cooldown and upgraded daily cap behavior.",
+        "PRO includes faster cooldown and unlimited daily leads.",
     )
     if not notified:
         await message.answer(
