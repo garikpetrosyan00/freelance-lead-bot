@@ -1,7 +1,7 @@
 """Handlers package."""
 
 from .skills import router as skills_router
-from .skills_picker import router as skills_picker_router
+from .ui_skills_picker import router as skills_picker_router
 from .start import router as start_router
 from .subscription import router as subscription_router
 from .test_lead import router as test_lead_router
@@ -14,6 +14,8 @@ from .payment_admin import router as payment_admin_router
 from .analytics_admin import router as analytics_admin_router
 from .monitoring_admin import router as monitoring_admin_router
 from .upgrade_request import router as upgrade_request_router
+from .ui_flow import router as ui_flow_router
+from .ui_settings import router as ui_settings_router
 
 __all__ = [
     "start_router",
@@ -30,4 +32,6 @@ __all__ = [
     "analytics_admin_router",
     "monitoring_admin_router",
     "upgrade_request_router",
+    "ui_flow_router",
+    "ui_settings_router",
 ]

@@ -15,6 +15,26 @@ from app.ops.validation import parse_choice, parse_int
 router = Router()
 
 
+def render_upgrade_text() -> str:
+    contact = get_upgrade_contact()
+    payment_link = get_payment_link()
+    lines = [
+        "PRO benefits:",
+        "- LOW alerts",
+        "- Custom min level",
+        "- Custom daily cap",
+        "- Faster cooldown",
+        "- Unlimited cap (if configured)",
+    ]
+    if payment_link:
+        lines.append(f"Pay here: {payment_link}")
+    else:
+        lines.append("Payment link coming soon.")
+    lines.append(f"After payment, message {contact} with your /my_id.")
+    lines.append("Daily cap is based on UTC day.")
+    return "\n".join(lines)
+
+
 @router.message(Command("plan"))
 async def handle_plan(message: Message) -> None:
     user_id = message.from_user.id
@@ -35,23 +55,7 @@ async def handle_plan(message: Message) -> None:
 
 @router.message(Command("upgrade"))
 async def handle_upgrade(message: Message) -> None:
-    contact = get_upgrade_contact()
-    payment_link = get_payment_link()
-    lines = [
-        "PRO benefits:",
-        "- LOW alerts",
-        "- Custom min level",
-        "- Custom daily cap",
-        "- Faster cooldown",
-        "- Unlimited cap (if configured)",
-    ]
-    if payment_link:
-        lines.append(f"Pay here: {payment_link}")
-    else:
-        lines.append("Payment link coming soon.")
-    lines.append(f"After payment, message {contact} with your /my_id.")
-    lines.append("Daily cap is based on UTC day.")
-    await message.answer("\n".join(lines))
+    await message.answer(render_upgrade_text())
 
 
 @router.message(Command("set_plan"))

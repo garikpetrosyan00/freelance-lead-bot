@@ -194,6 +194,16 @@ def reconcile_user_payment(user_id: int, force: bool = False) -> ReconcileResult
                     currency=str(session.get("currency") or "") or None,
                 )
                 log_event(
+                    "checkout_completed",
+                    user_id=user_id,
+                    plan="PRO",
+                    meta={
+                        "source": "reconcile:checkout",
+                        "checkout_session_id": checkout_session_id,
+                        "subscription_id": subscription_id_resolved,
+                    },
+                )
+                log_event(
                     "payment_confirmed",
                     user_id=user_id,
                     plan="PRO",

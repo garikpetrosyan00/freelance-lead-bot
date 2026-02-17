@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -108,6 +109,8 @@ def create_checkout_session(
     user_id: int,
     username: str | None,
     request_id: int | None,
+    success_url: str | None = None,
+    cancel_url: str | None = None,
 ) -> dict[str, Any]:
     config = get_stripe_checkout_config()
     if not config.enabled:
@@ -126,14 +129,28 @@ def create_checkout_session(
     if request_id is not None:
         metadata["request_id"] = str(request_id)
 
-    success_url = f"{config.public_base_url}{config.success_path}?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{config.public_base_url}{config.cancel_path}"
+    bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
+    return_to_bot_url = (
+        f"https://t.me/{bot_username}?start=pro_return"
+        if bot_username
+        else None
+    )
+
+    resolved_success_url = success_url
+    resolved_cancel_url = cancel_url
+    if return_to_bot_url:
+        resolved_success_url = return_to_bot_url
+        resolved_cancel_url = return_to_bot_url
+    if not resolved_success_url:
+        resolved_success_url = f"{config.public_base_url}{config.success_path}?session_id={{CHECKOUT_SESSION_ID}}"
+    if not resolved_cancel_url:
+        resolved_cancel_url = f"{config.public_base_url}{config.cancel_path}"
 
     kwargs: dict[str, Any] = {
         "mode": config.mode,
         "line_items": [{"price": config.price_id, "quantity": 1}],
-        "success_url": success_url,
-        "cancel_url": cancel_url,
+        "success_url": resolved_success_url,
+        "cancel_url": resolved_cancel_url,
         "metadata": metadata,
         "client_reference_id": str(user_id),
     }
@@ -141,6 +158,7 @@ def create_checkout_session(
         kwargs["subscription_data"] = {"metadata": metadata}
 
     session = stripe.checkout.Session.create(**kwargs)
-    if isinstance(session, dict):
-        return session
-    return session.to_dict()
+    result = session if isinstance(session, dict) else session.to_dict()
+    if return_to_bot_url:
+        result["return_to_bot_url"] = return_to_bot_url
+    return result

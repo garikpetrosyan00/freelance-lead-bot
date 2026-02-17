@@ -192,6 +192,16 @@ async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) ->
         currency=str(session.get("currency") or "") or None,
     )
     log_event(
+        "checkout_completed",
+        user_id=user_id,
+        plan="PRO",
+        meta={
+            "source": "webhook:checkout.session.completed",
+            "checkout_session_id": session_id,
+            "subscription_id": str(session.get("subscription") or "") or None,
+        },
+    )
+    log_event(
         "payment_confirmed",
         user_id=user_id,
         plan="PRO",

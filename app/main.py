@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher
 
 from app import db
+from app.analytics import log_event
 from app.db import expire_overdue_pro_users, record_error
 from app.config import (
     enable_fake_ingestion,
@@ -30,6 +31,8 @@ from app.handlers import (
     start_router,
     subscription_router,
     test_lead_router,
+    ui_flow_router,
+    ui_settings_router,
     upgrade_request_router,
 )
 from app.ingestion.telegram_listener import run_telegram_listener
@@ -76,6 +79,13 @@ async def run_pro_expiry_loop(bot: Bot, interval_seconds: int = PRO_EXPIRY_CHECK
             now_iso = datetime.now(timezone.utc).isoformat()
             downgraded_user_ids = expire_overdue_pro_users(now_iso)
             for user_id in downgraded_user_ids:
+                log_event(
+                    "pro_expired",
+                    user_id=user_id,
+                    plan="FREE",
+                    meta={"source": "expiry_loop"},
+                    ts=now_iso,
+                )
                 try:
                     await bot.send_message(chat_id=user_id, text="Your PRO subscription has expired.")
                 except Exception as exc:
@@ -112,6 +122,8 @@ async def main() -> None:
     dp = Dispatcher()
     dp.message.middleware(RateLimitMiddleware())
     dp.include_router(start_router)
+    dp.include_router(ui_flow_router)
+    dp.include_router(ui_settings_router)
     dp.include_router(skills_router)
     dp.include_router(skills_picker_router)
     dp.include_router(test_lead_router)

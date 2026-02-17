@@ -1764,6 +1764,23 @@ def get_source_stats(since_iso: str, until_iso: str, limit: int = 15) -> list[di
 
 def activate_pro_for_user(user_id: int, reason: str, activated_at_iso: str) -> None:
     mark_user_pro(user_id=user_id, enabled=True, activated_at_iso=activated_at_iso, plan="PRO")
+    activated_at = _parse_iso_utc(activated_at_iso) or datetime.now(timezone.utc)
+    dedupe_since = (activated_at - timedelta(hours=1)).isoformat()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM analytics_events
+            WHERE user_id = ?
+              AND event = 'pro_activated'
+              AND ts >= ?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (user_id, dedupe_since),
+        ).fetchone()
+    if row is not None:
+        return
     log_event(
         "pro_activated",
         user_id=user_id,

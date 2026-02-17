@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from aiogram import Bot
 
 from app.analytics import log_event
+from app import db as db_module
 from app.db import (
     get_daily_usage,
     get_last_sent_at,
@@ -23,6 +24,7 @@ from app.db import (
 )
 from app.gating import can_send_notification, effective_cap
 from app.leads import Lead
+from app.monetization.teaser import maybe_send_teaser
 from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
 
 
@@ -115,6 +117,22 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
             plan=plan,
             meta={"reason": blocked_reason, "source": lead.source},
         )
+        teaser_reason: str | None = None
+        if plan == "FREE":
+            if reason == "daily_cap_reached":
+                teaser_reason = "cap"
+            elif reason in {"level_not_allowed", "below_min_level"}:
+                teaser_reason = "min_level"
+        if teaser_reason is not None:
+            await maybe_send_teaser(
+                bot=bot,
+                db=db_module,
+                user_id=user_id,
+                chat_id=user_id,
+                lead=lead,
+                reason=teaser_reason,
+                match_level=str(match_level or "NONE"),
+            )
         return False
 
     matched = match.get("matched", [])
