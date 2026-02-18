@@ -30,10 +30,15 @@ def settings_text(
         f"Minimum skill matches: {int(min_skill_matches)}\n"
         f"Daily lead limit: {_daily_limit_label(daily_limit)}"
     )
+    min_allowed, max_allowed = min_skill_matches_bounds_for_skills_count(skills_count)
     if saved:
         text = f"{text}\n\n✅ Saved"
-    if int(skills_count) < 3:
-        text = f"{text}\n\nAdd more skills in Skills to improve matching."
+    if min_allowed == max_allowed:
+        text = (
+            f"{text}\n\n"
+            f"You currently have {int(skills_count)} skills selected.\n"
+            "Add more skills to increase this value."
+        )
     return text
 
 
@@ -46,11 +51,12 @@ def settings_kb(plan: str, min_skill_matches: int, daily_limit: int | None, skil
     _ = (plan, daily_limit)
     rows: list[list[InlineKeyboardButton]] = []
     min_allowed, max_allowed = min_skill_matches_bounds_for_skills_count(skills_count)
-    buttons = [_min_btn(min_skill_matches, value) for value in range(min_allowed, max_allowed + 1)]
-    row_size = 5
-    for idx in range(0, len(buttons), row_size):
-        rows.append(buttons[idx : idx + row_size])
-    if int(skills_count) < 3:
+    if min_allowed != max_allowed:
+        buttons = [_min_btn(min_skill_matches, value) for value in range(min_allowed, max_allowed + 1)]
+        row_size = 5
+        for idx in range(0, len(buttons), row_size):
+            rows.append(buttons[idx : idx + row_size])
+    else:
         rows.append([InlineKeyboardButton(text="📌 Skills", callback_data="ui:skills")])
     rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="ui:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
