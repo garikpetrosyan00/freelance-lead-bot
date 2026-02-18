@@ -25,6 +25,26 @@ def main() -> int:
         db.configure_db(path)
         db.init_db()
 
+        # JSON1 support detection should be cached after first evaluation.
+        original_connect = db._connect
+        original_json_support = db._JSON_EXTRACT_SUPPORTED
+        connect_calls = [0]
+
+        def _counting_connect():
+            connect_calls[0] += 1
+            return original_connect()
+
+        db._JSON_EXTRACT_SUPPORTED = None
+        db._connect = _counting_connect
+        try:
+            first_json1 = db._json_extract_supported()
+            second_json1 = db._json_extract_supported()
+            assert first_json1 == second_json1
+            assert connect_calls[0] == 1
+        finally:
+            db._connect = original_connect
+            db._JSON_EXTRACT_SUPPORTED = original_json_support
+
         now = datetime.now(timezone.utc)
         since = (now - timedelta(days=1)).isoformat()
         until = (now + timedelta(days=1)).isoformat()
@@ -61,6 +81,12 @@ def main() -> int:
                 ),
             )
             conn.commit()
+        special_session_id = r"abc%_\123"
+        db.log_event(
+            "checkout_completed",
+            user_id=5,
+            meta={"checkout_session_id": special_session_id},
+        )
 
         recent_now_iso = now.isoformat()
         recent_old_iso = (now - timedelta(minutes=2)).isoformat()
@@ -110,6 +136,12 @@ def main() -> int:
         assert db.has_event_with_session(5, "checkout_completed", "cs_smoke_123") is True
         assert db.has_event_with_session(5, "checkout_completed", "cs_smoke_spaced_456") is True
         assert db.has_event_with_session(5, "checkout_completed", "cs_other") is False
+        prior_json_support = db._JSON_EXTRACT_SUPPORTED
+        db._JSON_EXTRACT_SUPPORTED = False
+        try:
+            assert db.has_event_with_session(5, "checkout_completed", special_session_id) is True
+        finally:
+            db._JSON_EXTRACT_SUPPORTED = prior_json_support
         assert db.has_recent_event(6, "recent_probe_now", within_minutes=1) is True
         assert db.has_recent_event(6, "recent_probe_old", within_minutes=1) is False
         assert db.has_recent_event(6, "recent_probe_old", within_minutes=3) is True
@@ -136,6 +168,10 @@ def main() -> int:
         text_other = _teaser_text(sample_lead, "LOW", "quota")
         assert "PRO unlocks LOW leads + more matches." in text_min_level
         assert "PRO gives unlimited daily leads and unlocks more leads." in text_other
+        assert "cap" not in text_min_level.lower()
+        assert "cap" not in text_other.lower()
+        assert "FREE: 3/day. PRO: Unlimited." in text_min_level
+        assert "FREE: 3/day. PRO: Unlimited." in text_other
 
         since_ret = "2026-02-01T00:00:00+00:00"
         until_ret = "2026-02-11T00:00:00+00:00"

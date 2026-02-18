@@ -127,7 +127,7 @@ def _teaser_text(lead: Lead, match_level: str, reason: str) -> str:
         f"Title: {title}\n"
         f"Preview: {preview}\n"
         f"{value_line}\n"
-        "FREE: 3 previews/day. PRO: Unlimited."
+        "FREE: 3/day. PRO: Unlimited."
     )
 
 
@@ -156,11 +156,13 @@ async def maybe_send_teaser(
     if (count or 0) >= TEASER_DAILY_LIMIT:
         return
 
+    markup = _teaser_markup()
+
     try:
         await bot.send_message(
             chat_id=chat_id,
             text=_teaser_text(lead, str(match_level or "NONE"), reason),
-            reply_markup=_teaser_markup(),
+            reply_markup=markup,
         )
     except Exception as exc:
         with suppress(Exception):
