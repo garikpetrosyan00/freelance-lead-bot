@@ -77,6 +77,16 @@ async def handle_ui_settings(callback: CallbackQuery) -> None:
         await callback.answer()
 
 
+@router.callback_query(F.data == "ui:match_filter")
+async def handle_ui_match_filter(callback: CallbackQuery) -> None:
+    try:
+        _seed_ui_anchor(callback)
+        _clear_picker_awaiting_custom(callback.from_user.id)
+        await _render_settings(callback)
+    finally:
+        await callback.answer()
+
+
 @router.callback_query(F.data.startswith("set:min_skill_matches:"))
 async def handle_set_min(callback: CallbackQuery) -> None:
     try:

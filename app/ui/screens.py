@@ -37,7 +37,7 @@ def home_text(user: User, plan: str, usage_summary: dict[str, Any] | None) -> st
     lines = [
         "🏠 Home Dashboard",
         f"Plan: {plan_label}",
-        f"Minimum skill matches: {min_skill_matches_text}",
+        f"Match filter: {min_skill_matches_text} skills",
         f"Daily lead limit: {daily_limit}",
         f"Today usage: {today_sent} sent / {today_blocked} blocked",
     ]
@@ -67,9 +67,12 @@ def home_kb(plan: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🔎 Test lead", callback_data="ui:test_lead"),
-                InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
             ],
             [
+                InlineKeyboardButton(text="🎯 Match Filter", callback_data="ui:match_filter"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
                 InlineKeyboardButton(text="ℹ️ Help", callback_data="ui:help"),
             ],
         ]
@@ -82,6 +85,9 @@ def home_kb(plan: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📌 Skills", callback_data="ui:skills"),
                 InlineKeyboardButton(text="🔎 Test lead", callback_data="ui:test_lead"),
+            ],
+            [
+                InlineKeyboardButton(text="🎯 Match Filter", callback_data="ui:match_filter"),
             ],
             [
                 InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
