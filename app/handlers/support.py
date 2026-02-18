@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from aiogram import F, Router
@@ -16,6 +17,7 @@ from app.gating import effective_cap
 from app.ui.state import UI_MESSAGE_ID, render_ui_message
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 class SupportStates(StatesGroup):
@@ -46,9 +48,17 @@ def _support_kb() -> InlineKeyboardMarkup:
 def _support_compose_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Cancel", callback_data="ui:support:cancel")],
+            [InlineKeyboardButton(text="⬅ Back", callback_data="ui:support:cancel")],
         ]
     )
+
+
+def support_delivery_fallback_text() -> str:
+    return f"We couldn’t deliver your message in-chat right now. Please email us at {get_support_email()}."
+
+
+def support_admin_chat_configured(admin_chat_id: int | None) -> bool:
+    return isinstance(admin_chat_id, int) and admin_chat_id != 0
 
 
 def _extract_support_message(message: Message) -> str | None:
@@ -119,7 +129,7 @@ async def handle_ui_support_cancel(callback: CallbackQuery, state: FSMContext) -
         text=_support_text(),
         reply_markup=_support_kb(),
     )
-    await callback.answer("Canceled")
+    await callback.answer("Back")
 
 
 @router.message(SupportStates.awaiting_support_message)
@@ -140,14 +150,20 @@ async def handle_support_ticket_message(message: Message, state: FSMContext) -> 
         await state.clear()
         return
 
+    username = str(user.username or "").strip()
+    username_label = f"@{username}" if username else "(no username)"
     admin_chat_id = get_admin_chat_id()
-    if admin_chat_id is None:
-        await message.answer("Support is temporarily unavailable. Please try again later.")
+    if not support_admin_chat_configured(admin_chat_id):
+        logger.warning(
+            "Support misconfigured: invalid ADMIN_CHAT_ID; user_id=%s username=%s admin_chat_id=%s",
+            user.id,
+            username_label,
+            admin_chat_id,
+        )
+        await message.answer(support_delivery_fallback_text())
         await state.clear()
         return
 
-    username = str(user.username or "").strip()
-    username_label = f"@{username}" if username else "(no username)"
     now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     details = _settings_summary(user.id)
     admin_text = (
@@ -162,12 +178,21 @@ async def handle_support_ticket_message(message: Message, state: FSMContext) -> 
     try:
         await message.bot.send_message(chat_id=admin_chat_id, text=admin_text)
     except Exception as exc:
+        logger.warning(
+            "Support forward failed; user_id=%s username=%s admin_chat_id=%s exception=%s message=%s",
+            user.id,
+            username_label,
+            admin_chat_id,
+            exc.__class__.__name__,
+            str(exc),
+            exc_info=True,
+        )
         db.record_error(
             "admin",
             exc,
             context={"action": "support_ticket_forward", "admin_chat_id": admin_chat_id, "user_id": user.id},
         )
-        await message.answer("Support is temporarily unavailable. Please try again later.")
+        await message.answer(support_delivery_fallback_text())
         await state.clear()
         return
 
