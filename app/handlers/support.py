@@ -109,19 +109,17 @@ async def handle_ui_support_compose(callback: CallbackQuery, state: FSMContext) 
 
 @router.callback_query(F.data == "ui:support:cancel")
 async def handle_ui_support_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    try:
-        _seed_ui_anchor(callback)
-        await state.clear()
-        chat_id = callback.message.chat.id if isinstance(callback.message, Message) else callback.from_user.id
-        await render_ui_message(
-            callback.bot,
-            chat_id=chat_id,
-            user_id=callback.from_user.id,
-            text=f"{_support_text()}\n\nSupport request canceled.",
-            reply_markup=_support_kb(),
-        )
-    finally:
-        await callback.answer()
+    _seed_ui_anchor(callback)
+    await state.clear()
+    chat_id = callback.message.chat.id if isinstance(callback.message, Message) else callback.from_user.id
+    await render_ui_message(
+        callback.bot,
+        chat_id=chat_id,
+        user_id=callback.from_user.id,
+        text=_support_text(),
+        reply_markup=_support_kb(),
+    )
+    await callback.answer("Canceled")
 
 
 @router.message(SupportStates.awaiting_support_message)
