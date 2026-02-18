@@ -9,9 +9,7 @@ import json
 import logging
 from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any
-
-from aiogram import Bot
+from typing import TYPE_CHECKING, Any
 
 from app.analytics import log_event
 from app.config import (
@@ -25,6 +23,7 @@ from app.db import (
     activate_pro_for_user,
     attach_payment_to_upgrade_request,
     decide_upgrade_request,
+    get_plan,
     has_event_with_session,
     downgrade_user_to_free,
     get_pending_upgrade_request_id,
@@ -43,6 +42,11 @@ from app.db import (
 from app.ops.logging_utils import log_kv, mask_stripe_id, mask_user_id, safe_exc
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from aiogram import Bot
+else:  # pragma: no cover - optional import for local smoke runs without aiogram
+    Bot = Any
 
 try:
     import stripe
@@ -123,6 +127,27 @@ def _extract_request_id_from_metadata(metadata: dict[str, Any] | None) -> int | 
         return None
 
 
+def _checkout_session_is_successful(session: dict[str, Any]) -> bool:
+    payment_status = str(session.get("payment_status") or "").strip().lower()
+    if payment_status == "paid":
+        return True
+    subscription_obj = session.get("subscription")
+    if isinstance(subscription_obj, dict):
+        sub_status = str(subscription_obj.get("status") or "").strip().lower()
+        if sub_status in {"active", "trialing"}:
+            return True
+    return False
+
+
+def _activate_pro_if_needed(user_id: int, *, reason: str, ts_iso: str) -> bool:
+    if get_plan(user_id) == "PRO":
+        logger.info("Skipping duplicate PRO activation for user=%s reason=%s", mask_user_id(user_id), reason)
+        return False
+    activate_pro_for_user(user_id=user_id, reason=reason, activated_at_iso=ts_iso)
+    logger.info("Activated PRO for user=%s reason=%s", mask_user_id(user_id), reason)
+    return True
+
+
 async def _notify_user(bot: Bot, user_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id=user_id, text=text)
@@ -198,6 +223,13 @@ async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) ->
     if not session_id:
         logger.warning("Stripe checkout.session.completed missing session id")
         return
+    if not _checkout_session_is_successful(session):
+        logger.info(
+            "Skipping PRO activation for incomplete checkout session_id=%s payment_status=%s",
+            mask_stripe_id(session_id),
+            str(session.get("payment_status") or "").strip().lower() or "unknown",
+        )
+        return
 
     upsert_payment_from_checkout(session)
     mark_payment_paid_by_session(
@@ -247,18 +279,22 @@ async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) ->
         )
 
     decided_at = _utc_now_iso()
-    activate_pro_for_user(user_id=user_id, reason="stripe_checkout_completed", activated_at_iso=decided_at)
-    _auto_approve_upgrade_request(user_id=user_id, request_id=request_id, decided_at=decided_at)
-
-    await _notify_user(
-        bot,
-        user_id,
-        "Payment received. PRO activated.\nUse /settings to adjust your PRO limits.",
-    )
+    activated = _activate_pro_if_needed(user_id=user_id, reason="stripe_checkout_completed", ts_iso=decided_at)
+    if activated:
+        _auto_approve_upgrade_request(user_id=user_id, request_id=request_id, decided_at=decided_at)
+        await _notify_user(
+            bot,
+            user_id,
+            "✅ PRO activated",
+        )
 
 
 async def _handle_invoice_paid(bot: Bot, event: dict[str, Any]) -> None:
     invoice = event.get("data", {}).get("object", {})
+    invoice_status = str(invoice.get("status") or "").strip().lower()
+    if invoice_status != "paid":
+        logger.info("Skipping invoice activation for status=%s", invoice_status or "unknown")
+        return
     subscription_id = str(invoice.get("subscription") or "").strip()
     if not subscription_id:
         return
@@ -291,8 +327,9 @@ async def _handle_invoice_paid(bot: Bot, event: dict[str, Any]) -> None:
         current_period_end=period_end,
     )
 
-    activate_pro_for_user(user_id=user_id, reason="stripe_invoice_paid", activated_at_iso=_utc_now_iso())
-    await _notify_user(bot, user_id, "Subscription payment received. PRO remains active.")
+    activated = _activate_pro_if_needed(user_id=user_id, reason="stripe_invoice_paid", ts_iso=_utc_now_iso())
+    if activated:
+        await _notify_user(bot, user_id, "✅ PRO activated")
 
 
 async def _handle_subscription_updated(event: dict[str, Any]) -> None:
@@ -392,6 +429,24 @@ async def _dispatch_event(bot: Bot, event: dict[str, Any]) -> None:
     logger.info("Unhandled Stripe event type=%s", event_type)
 
 
+async def _process_stripe_event(bot: Bot, event: dict[str, Any]) -> dict[str, Any]:
+    event_id = str(event.get("id") or "").strip()
+    if not event_id:
+        logger.warning("Stripe webhook without event id")
+        return {"ok": True, "missing_id": True}
+
+    first_seen = mark_event_processed("stripe", event_id)
+    if not first_seen:
+        return {"ok": True, "duplicate": True}
+
+    try:
+        await _dispatch_event(bot, event)
+    except Exception:
+        unmark_event_processed("stripe", event_id)
+        raise
+    return {"ok": True}
+
+
 def create_webhook_app(bot: Bot):
     if FastAPI is None:
         raise RuntimeError("Webhook dependencies are unavailable")
@@ -431,19 +486,10 @@ def create_webhook_app(bot: Bot):
                 log_kv(logger, logging.WARNING, "Invalid Stripe webhook signature", error=safe_exc(exc))
                 return JSONResponse(status_code=400, content={"error": "invalid signature"})
 
-            event_id = str(event.get("id") or "").strip()
-            if not event_id:
-                logger.warning("Stripe webhook without event id")
-                return {"ok": True}
-
-            first_seen = mark_event_processed("stripe", event_id)
-            if not first_seen:
-                return {"ok": True, "duplicate": True}
-
             try:
-                await _dispatch_event(bot, event)
+                result = await _process_stripe_event(bot, event)
             except Exception as exc:
-                unmark_event_processed("stripe", event_id)
+                event_id = str(event.get("id") or "").strip()
                 record_error(
                     "webhook",
                     exc,
@@ -463,7 +509,7 @@ def create_webhook_app(bot: Bot):
                 )
                 return JSONResponse(status_code=500, content={"error": "processing failed"})
 
-            return {"ok": True}
+            return result
 
     @app.post("/webhooks/lemon")
     async def lemon_webhook(  # type: ignore[no-redef]
