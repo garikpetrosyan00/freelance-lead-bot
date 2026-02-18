@@ -72,7 +72,7 @@ def get_stripe_checkout_config() -> StripeCheckoutConfig:
     if not secret_key:
         return StripeCheckoutConfig(
             enabled=False,
-            reason="STRIPE_SECRET_KEY is not configured.",
+            reason="STRIPE_SECRET is not configured.",
             mode=mode,
             price_id=price_id,
             currency=currency,
@@ -124,6 +124,7 @@ def create_checkout_session(
 
     metadata: dict[str, str] = {
         "user_id": str(user_id),
+        "telegram_user_id": str(user_id),
         "username": username or "",
     }
     if request_id is not None:

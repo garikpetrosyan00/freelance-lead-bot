@@ -25,6 +25,7 @@ from app.db import (
     activate_pro_for_user,
     attach_payment_to_upgrade_request,
     decide_upgrade_request,
+    has_event_with_session,
     downgrade_user_to_free,
     get_pending_upgrade_request_id,
     get_upgrade_request_by_id,
@@ -76,7 +77,7 @@ def is_stripe_webhook_enabled() -> tuple[bool, str | None]:
     if FastAPI is None or uvicorn is None:
         return False, "fastapi/uvicorn dependencies are missing"
     if not get_stripe_secret_key():
-        return False, "STRIPE_SECRET_KEY is not configured"
+        return False, "STRIPE_SECRET is not configured"
     if not get_stripe_webhook_secret():
         return False, "STRIPE_WEBHOOK_SECRET is not configured"
     return True, None
@@ -85,11 +86,27 @@ def is_stripe_webhook_enabled() -> tuple[bool, str | None]:
 def _extract_user_id_from_metadata(metadata: dict[str, Any] | None) -> int | None:
     if not metadata:
         return None
-    raw = metadata.get("user_id")
-    if raw is None:
+    for key in ("telegram_user_id", "user_id"):
+        raw = metadata.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _extract_user_id_from_checkout_session(session: dict[str, Any]) -> int | None:
+    metadata = session.get("metadata") or {}
+    user_id = _extract_user_id_from_metadata(metadata)
+    if user_id is not None:
+        return user_id
+    raw_client_reference_id = session.get("client_reference_id")
+    if raw_client_reference_id is None:
         return None
     try:
-        return int(raw)
+        return int(raw_client_reference_id)
     except (TypeError, ValueError):
         return None
 
@@ -171,9 +188,9 @@ def _auto_approve_upgrade_request(user_id: int, request_id: int | None, decided_
 async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) -> None:
     session = event.get("data", {}).get("object", {})
     metadata = session.get("metadata") or {}
-    user_id = _extract_user_id_from_metadata(metadata)
+    user_id = _extract_user_id_from_checkout_session(session)
     if user_id is None:
-        logger.warning("Stripe checkout.session.completed missing metadata.user_id")
+        logger.warning("Stripe checkout.session.completed missing Telegram user id")
         return
 
     request_id = _extract_request_id_from_metadata(metadata)
@@ -191,16 +208,22 @@ async def _handle_checkout_session_completed(bot: Bot, event: dict[str, Any]) ->
         amount_total=int(session.get("amount_total")) if session.get("amount_total") is not None else None,
         currency=str(session.get("currency") or "") or None,
     )
-    log_event(
-        "checkout_completed",
+    should_log_checkout_completed = not has_event_with_session(
         user_id=user_id,
-        plan="PRO",
-        meta={
-            "source": "webhook:checkout.session.completed",
-            "checkout_session_id": session_id,
-            "subscription_id": str(session.get("subscription") or "") or None,
-        },
+        event="checkout_completed",
+        session_id=session_id,
     )
+    if should_log_checkout_completed:
+        log_event(
+            "checkout_completed",
+            user_id=user_id,
+            plan="PRO",
+            meta={
+                "source": "webhook:checkout.session.completed",
+                "checkout_session_id": session_id,
+                "subscription_id": str(session.get("subscription") or "") or None,
+            },
+        )
     log_event(
         "payment_confirmed",
         user_id=user_id,
@@ -351,6 +374,9 @@ async def _dispatch_event(bot: Bot, event: dict[str, Any]) -> None:
         await _handle_checkout_session_completed(bot, event)
         return
     if event_type == "invoice.paid":
+        await _handle_invoice_paid(bot, event)
+        return
+    if event_type == "invoice.payment_succeeded":
         await _handle_invoice_paid(bot, event)
         return
     if event_type == "customer.subscription.updated":

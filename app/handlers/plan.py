@@ -27,7 +27,7 @@ def render_upgrade_text() -> str:
         lines.append(f"Pay here: {payment_link}")
     else:
         lines.append("Payment link coming soon.")
-    lines.append(f"After payment, message {contact} with your /my_id.")
+    lines.append(f"After payment, PRO activates automatically for this Telegram account. Contact: {contact}.")
     lines.append("Daily lead limit resets by UTC day.")
     return "\n".join(lines)
 

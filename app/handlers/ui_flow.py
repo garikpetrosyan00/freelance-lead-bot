@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app import db
 from app.analytics import log_event
 from app.billing.stripe_checkout import create_checkout_session
+from app.config import get_admin_user_ids
 from app.handlers.plan import render_upgrade_text
 from app.handlers.test_lead import handle_test_lead
 from app.ops.usage import get_usage_summary
@@ -92,6 +93,33 @@ def _upgrade_checkout_kb(url: str) -> InlineKeyboardMarkup:
     )
 
 
+async def _notify_admins_about_pro_interest(callback: CallbackQuery) -> None:
+    user = callback.from_user
+    user_id = int(user.id)
+    if db.has_recent_event(user_id=user_id, event="pro_interest_admin_notified", within_minutes=10):
+        return
+
+    username = str(user.username or "").strip()
+    username_label = f"@{username}" if username else "(no username)"
+    text = f"💳 PRO interest: {username_label} (id={user_id}) clicked Subscribe. Link coming soon."
+    admin_ids = get_admin_user_ids()
+    for admin_id in admin_ids:
+        try:
+            await callback.bot.send_message(chat_id=admin_id, text=text)
+        except Exception as exc:
+            db.record_error(
+                "admin",
+                exc,
+                context={"action": "notify_pro_interest", "admin_id": admin_id, "user_id": user_id},
+            )
+    log_event(
+        "pro_interest_admin_notified",
+        user_id=user_id,
+        plan=db.get_plan(user_id),
+        meta={"source": "ui:upgrade"},
+    )
+
+
 @router.callback_query(F.data == "ui:home")
 async def handle_ui_home(callback: CallbackQuery) -> None:
     try:
@@ -159,6 +187,7 @@ async def handle_ui_upgrade(callback: CallbackQuery) -> None:
         _seed_ui_anchor(callback)
         user = callback.from_user
         _clear_picker_awaiting_custom(user.id)
+        await _notify_admins_about_pro_interest(callback)
         log_event(
             "upgrade_clicked",
             user_id=user.id,
