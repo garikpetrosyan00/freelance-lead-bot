@@ -27,10 +27,13 @@ def _clear_picker_awaiting_custom(user_id: int) -> None:
         state["awaiting_custom"] = False
 
 
-def _effective_display_settings(user_id: int) -> tuple[str, int, int | None]:
+def _effective_display_settings(user_id: int) -> tuple[str, int, int | None, int]:
     plan = db.get_plan(user_id)
+    skills_count = len(db.get_skills(user_id))
+    max_skill_matches = max(1, skills_count)
     min_skill_matches, _ = db.get_user_settings(user_id)
-    return plan, int(min_skill_matches), effective_cap(plan, None)
+    effective_min = min(int(min_skill_matches), max_skill_matches)
+    return plan, effective_min, effective_cap(plan, None), skills_count
 
 
 async def _render_settings(
@@ -43,17 +46,18 @@ async def _render_settings(
     chat_id = callback.message.chat.id if isinstance(callback.message, Message) else user_id
     if isinstance(callback.message, Message):
         UI_MESSAGE_ID[user_id] = callback.message.message_id
-    plan, min_skill_matches, daily_limit = _effective_display_settings(user_id)
+    plan, min_skill_matches, daily_limit, skills_count = _effective_display_settings(user_id)
     text = settings_text(
         callback.from_user,
         plan,
         min_skill_matches,
         daily_limit,
+        skills_count,
         saved=saved,
     )
     if notice:
         text = f"{text}\n\n{notice}"
-    markup = settings_kb(plan, min_skill_matches, daily_limit)
+    markup = settings_kb(plan, min_skill_matches, daily_limit, max(1, skills_count))
     await render_ui_message(
         callback.bot,
         chat_id=chat_id,
@@ -83,8 +87,12 @@ async def handle_set_min(callback: CallbackQuery) -> None:
             await _render_settings(callback, notice="Invalid value.")
             return
         min_skill_matches = int(raw_value)
-        if min_skill_matches < 3 or min_skill_matches > 8:
-            await _render_settings(callback, notice="Choose a value from 3 to 8.")
+        max_skill_matches = max(1, len(db.get_skills(user_id)))
+        if min_skill_matches < 1 or min_skill_matches > max_skill_matches:
+            await _render_settings(
+                callback,
+                notice=f"Choose a value from 1 to {max_skill_matches} based on your selected skills.",
+            )
             return
 
         db.set_user_min_skill_matches(user_id, min_skill_matches)

@@ -6,7 +6,14 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.db import get_daily_usage, get_plan, get_user_settings, set_user_min_skill_matches, utc_day
+from app.db import (
+    get_daily_usage,
+    get_plan,
+    get_skills,
+    get_user_settings,
+    set_user_min_skill_matches,
+    utc_day,
+)
 from app.gating import FREE_DAILY_CAP, effective_cap
 
 router = Router()
@@ -35,6 +42,8 @@ async def handle_settings(message: Message) -> None:
         f"Daily lead limit: {limit_text}",
         f"Used today: {used_today}",
     ]
+    if len(get_skills(user_id)) < 3:
+        lines.append("Add more skills to improve matching.")
 
     await message.answer("\n".join(lines))
 
@@ -52,6 +61,12 @@ async def handle_set_min_level(message: Message) -> None:
     value = int(parts[1])
     if value < 1 or value > 20:
         await message.answer("Minimum skill matches must be a number from 1 to 20.")
+        return
+    max_allowed = max(1, len(get_skills(message.from_user.id)))
+    if value > max_allowed:
+        await message.answer(
+            f"You currently have {max_allowed} selected skill(s). Set minimum skill matches to 1-{max_allowed}."
+        )
         return
 
     set_user_min_skill_matches(message.from_user.id, value)

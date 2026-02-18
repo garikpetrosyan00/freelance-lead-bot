@@ -16,6 +16,7 @@ def settings_text(
     plan: str,
     min_skill_matches: int,
     daily_limit: int | None,
+    skills_count: int,
     *,
     saved: bool = False,
 ) -> str:
@@ -29,6 +30,8 @@ def settings_text(
     )
     if saved:
         text = f"{text}\n\n✅ Saved"
+    if int(skills_count) < 3:
+        text = f"{text}\n\nAdd more skills to improve matching."
     return text
 
 
@@ -37,19 +40,13 @@ def _min_btn(current: int, value: int) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=f"{prefix}{value}", callback_data=f"set:min_skill_matches:{value}")
 
 
-def settings_kb(plan: str, min_skill_matches: int, daily_limit: int | None) -> InlineKeyboardMarkup:
+def settings_kb(plan: str, min_skill_matches: int, daily_limit: int | None, max_skill_matches: int) -> InlineKeyboardMarkup:
     _ = (plan, daily_limit)
-    rows = [
-        [
-            _min_btn(min_skill_matches, 3),
-            _min_btn(min_skill_matches, 4),
-            _min_btn(min_skill_matches, 5),
-        ],
-        [
-            _min_btn(min_skill_matches, 6),
-            _min_btn(min_skill_matches, 7),
-            _min_btn(min_skill_matches, 8),
-        ],
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    safe_max = max(1, int(max_skill_matches))
+    buttons = [_min_btn(min_skill_matches, value) for value in range(1, safe_max + 1)]
+    row_size = 5
+    for idx in range(0, len(buttons), row_size):
+        rows.append(buttons[idx : idx + row_size])
     rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="ui:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

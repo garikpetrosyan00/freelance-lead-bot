@@ -51,11 +51,16 @@ def main() -> int:
         since = (now - timedelta(days=1)).isoformat()
         until = (now + timedelta(days=1)).isoformat()
 
+        db.set_skills(42, ["python", "django", "react", "postgresql", "docker"])
         default_min_skill_matches, _ = db.get_user_settings(42)
         assert int(default_min_skill_matches) == 3
         db.set_user_min_skill_matches(42, 5)
         updated_min_skill_matches, _ = db.get_user_settings(42)
         assert int(updated_min_skill_matches) == 5
+        db.set_skills(43, ["python", "react", "sql"])
+        db.set_user_min_skill_matches(43, 5)
+        clamped_min_skill_matches, _ = db.get_user_settings(43)
+        assert int(clamped_min_skill_matches) == 3
 
         db.log_event("lead_ingested", lead_id="lead1")
         db.log_event("lead_ingested", lead_id="lead2", meta={"source": "telegram"})

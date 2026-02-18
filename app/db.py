@@ -2028,6 +2028,11 @@ def _normalize_min_skill_matches(value: Any) -> int:
     return max(1, min(parsed, 20))
 
 
+def _max_min_skill_matches_for_user(user_id: int) -> int:
+    skills_count = len(get_skills(user_id))
+    return max(1, skills_count)
+
+
 def get_user_settings(user_id: int) -> tuple[int, int | None]:
     with _connect() as conn:
         row = conn.execute(
@@ -2043,6 +2048,7 @@ def get_user_settings(user_id: int) -> tuple[int, int | None]:
         if min_skill_matches_raw is not None
         else _legacy_min_level_to_skill_matches(legacy_min_level)
     )
+    min_skill_matches = min(min_skill_matches, _max_min_skill_matches_for_user(user_id))
     daily_cap = row[2]
     return min_skill_matches, int(daily_cap) if daily_cap is not None else None
 
@@ -2055,6 +2061,7 @@ def set_user_min_level(user_id: int, min_level: str) -> None:
 
 def set_user_min_skill_matches(user_id: int, min_skill_matches: int) -> None:
     normalized = _normalize_min_skill_matches(min_skill_matches)
+    normalized = min(normalized, _max_min_skill_matches_for_user(user_id))
     now = _utc_now()
     with _connect() as conn:
         conn.execute(
