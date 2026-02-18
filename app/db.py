@@ -1267,6 +1267,92 @@ def log_event(
         logger.warning("Failed to write analytics event=%s", event, exc_info=True)
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def has_event_with_session(
+    user_id: int,
+    event: str,
+    session_id: str,
+    lookback_days: int = 30,
+) -> bool:
+    try:
+        safe_user_id = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    event_name = str(event or "").strip()
+    checkout_session_id = str(session_id or "").strip()
+    if safe_user_id <= 0 or not event_name or not checkout_session_id:
+        return False
+
+    safe_lookback_days = max(1, int(lookback_days))
+    since_iso = (datetime.now(timezone.utc) - timedelta(days=safe_lookback_days)).isoformat()
+    session_json = json.dumps(checkout_session_id, ensure_ascii=True, separators=(",", ":"))[1:-1]
+    needle = f'"checkout_session_id":"{session_json}"'
+    meta_like = f"%{_escape_like(needle)}%"
+
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM analytics_events
+                WHERE user_id = ?
+                  AND event = ?
+                  AND ts >= ?
+                  AND meta_json LIKE ? ESCAPE '\\'
+                LIMIT 1
+                """,
+                (safe_user_id, event_name, since_iso, meta_like),
+            ).fetchone()
+        return row is not None
+    except Exception:
+        logger.warning(
+            "Failed to check analytics event with session user_id=%s event=%s",
+            safe_user_id,
+            event_name,
+            exc_info=True,
+        )
+        return False
+
+
+def has_recent_event(user_id: int, event: str, within_minutes: int) -> bool:
+    try:
+        safe_user_id = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    event_name = str(event or "").strip()
+    if safe_user_id <= 0 or not event_name:
+        return False
+
+    safe_within_minutes = max(1, int(within_minutes))
+    since_iso = (datetime.now(timezone.utc) - timedelta(minutes=safe_within_minutes)).isoformat()
+
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM analytics_events
+                WHERE user_id = ?
+                  AND event = ?
+                  AND ts >= ?
+                LIMIT 1
+                """,
+                (safe_user_id, event_name, since_iso),
+            ).fetchone()
+        return row is not None
+    except Exception:
+        logger.warning(
+            "Failed to check recent analytics event user_id=%s event=%s",
+            safe_user_id,
+            event_name,
+            exc_info=True,
+        )
+        return False
+
+
 def record_error(
     component: str,
     exc: BaseException,
@@ -1911,4 +1997,3 @@ def set_user_min_level(user_id: int, min_level: str) -> None:
             (user_id, min_level, now),
         )
         conn.commit()
-

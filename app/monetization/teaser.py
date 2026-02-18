@@ -87,15 +87,22 @@ def _teaser_markup() -> InlineKeyboardMarkup:
     )
 
 
-def _teaser_text(lead: Lead, match_level: str) -> str:
+def _teaser_text(lead: Lead, match_level: str, reason: str) -> str:
     preview_source = lead.description or lead.title
     preview = _normalize_line(preview_source, max_len=120)
     title = _normalize_line(lead.title, max_len=80)
+    value_line = (
+        "PRO unlocks LOW leads + more matches."
+        if reason == "min_level"
+        else "PRO gives unlimited daily leads and unlocks more leads."
+    )
     return (
-        f"🔒 Lead locked ({match_level})\n"
+        "🔒 Lead locked\n"
+        f"Level: {match_level}\n"
         f"Title: {title}\n"
         f"Preview: {preview}\n"
-        "Upgrade to PRO to unlock LOW leads and unlimited daily leads."
+        f"{value_line}\n"
+        "FREE: 3 previews/day. PRO: Unlimited."
     )
 
 
@@ -128,7 +135,7 @@ async def maybe_send_teaser(
     try:
         await bot.send_message(
             chat_id=chat_id,
-            text=_teaser_text(lead, str(match_level or "NONE")),
+            text=_teaser_text(lead, str(match_level or "NONE"), reason),
             reply_markup=_teaser_markup(),
         )
     except Exception as exc:

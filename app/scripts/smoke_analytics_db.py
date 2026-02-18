@@ -37,6 +37,16 @@ def main() -> int:
         db.log_event("checkout_created", user_id=1, plan="FREE")
         db.log_event("payment_confirmed", user_id=1, plan="PRO")
         db.log_event("pro_activated", user_id=1, plan="PRO")
+        db.log_event(
+            "checkout_completed",
+            user_id=5,
+            meta={"checkout_session_id": "cs_smoke_123"},
+        )
+        db.log_event(
+            "reconcile_probe",
+            user_id=6,
+            ts=(now - timedelta(minutes=2)).isoformat(),
+        )
 
         # Multi-day retention/pro-health fixtures.
         db.log_event("lead_sent", user_id=1, ts="2026-02-01T09:00:00+00:00")
@@ -78,6 +88,10 @@ def main() -> int:
         blocks = db.get_block_reasons(since, until)
         assert blocks["reasons"].get("cap", 0) >= 1
         assert blocks["reasons"].get("cooldown", 0) >= 1
+        assert db.has_event_with_session(5, "checkout_completed", "cs_smoke_123") is True
+        assert db.has_event_with_session(5, "checkout_completed", "cs_other") is False
+        assert db.has_recent_event(6, "reconcile_probe", within_minutes=5) is True
+        assert db.has_recent_event(6, "reconcile_probe", within_minutes=1) is False
 
         sources = db.get_source_stats(since, until, limit=10)
         assert isinstance(sources, list)
