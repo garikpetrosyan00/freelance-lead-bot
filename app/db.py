@@ -1286,14 +1286,42 @@ def has_event_with_session(
     if safe_user_id <= 0 or not event_name or not checkout_session_id:
         return False
 
-    safe_lookback_days = max(1, int(lookback_days))
+    try:
+        safe_lookback_days = max(1, int(lookback_days))
+    except (TypeError, ValueError):
+        safe_lookback_days = 1
     since_iso = (datetime.now(timezone.utc) - timedelta(days=safe_lookback_days)).isoformat()
     session_json = json.dumps(checkout_session_id, ensure_ascii=True, separators=(",", ":"))[1:-1]
     needle = f'"checkout_session_id":"{session_json}"'
-    meta_like = f"%{_escape_like(needle)}%"
+    spaced_needle = f'"checkout_session_id": "{session_json}"'
+    compact_meta_like = f"%{_escape_like(needle)}%"
+    spaced_meta_like = f"%{_escape_like(spaced_needle)}%"
 
     try:
         with _connect() as conn:
+            if _json_extract_supported():
+                try:
+                    row = conn.execute(
+                        """
+                        SELECT 1
+                        FROM analytics_events
+                        WHERE user_id = ?
+                          AND event = ?
+                          AND ts >= ?
+                          AND json_extract(meta_json, '$.checkout_session_id') = ?
+                        LIMIT 1
+                        """,
+                        (safe_user_id, event_name, since_iso, checkout_session_id),
+                    ).fetchone()
+                    return row is not None
+                except Exception:
+                    logger.warning(
+                        "JSON session lookup failed, using LIKE fallback user_id=%s event=%s",
+                        safe_user_id,
+                        event_name,
+                        exc_info=True,
+                    )
+
             row = conn.execute(
                 """
                 SELECT 1
@@ -1301,10 +1329,19 @@ def has_event_with_session(
                 WHERE user_id = ?
                   AND event = ?
                   AND ts >= ?
-                  AND meta_json LIKE ? ESCAPE '\\'
+                  AND (
+                        meta_json LIKE ? ESCAPE '\\'
+                        OR meta_json LIKE ? ESCAPE '\\'
+                  )
                 LIMIT 1
                 """,
-                (safe_user_id, event_name, since_iso, meta_like),
+                (
+                    safe_user_id,
+                    event_name,
+                    since_iso,
+                    compact_meta_like,
+                    spaced_meta_like,
+                ),
             ).fetchone()
         return row is not None
     except Exception:
@@ -1326,7 +1363,10 @@ def has_recent_event(user_id: int, event: str, within_minutes: int) -> bool:
     if safe_user_id <= 0 or not event_name:
         return False
 
-    safe_within_minutes = max(1, int(within_minutes))
+    try:
+        safe_within_minutes = max(1, int(within_minutes))
+    except (TypeError, ValueError):
+        safe_within_minutes = 1
     since_iso = (datetime.now(timezone.utc) - timedelta(minutes=safe_within_minutes)).isoformat()
 
     try:

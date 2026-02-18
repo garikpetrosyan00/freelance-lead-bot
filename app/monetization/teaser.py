@@ -5,14 +5,29 @@ from __future__ import annotations
 import sqlite3
 from contextlib import suppress
 from datetime import date
-
-from aiogram import Bot
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from typing import TYPE_CHECKING, Any
 
 from app.analytics import log_event
 from app.leads import Lead
 
+if TYPE_CHECKING:
+    from aiogram import Bot
+    from aiogram.types import InlineKeyboardMarkup
+else:  # pragma: no cover - optional import for smoke scripts without aiogram
+    Bot = Any
+    InlineKeyboardMarkup = Any
+
 TEASER_DAILY_LIMIT = 2
+TEASER_REASON_MIN_LEVEL = "min_level"
+TEASER_REASON_CAP = "cap"
+TEASER_REASON_QUOTA = "quota"
+TEASER_REASON_OTHER = "other"
+TEASER_ALLOWED_REASONS = {
+    TEASER_REASON_MIN_LEVEL,
+    TEASER_REASON_CAP,
+    TEASER_REASON_QUOTA,
+    TEASER_REASON_OTHER,
+}
 _FALLBACK_DAY = ""
 _FALLBACK_COUNTERS: dict[int, int] = {}
 
@@ -79,6 +94,8 @@ def _analytics_teaser_count_today(db_module, user_id: int, today_iso: str) -> in
 
 
 def _teaser_markup() -> InlineKeyboardMarkup:
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="💳 Upgrade to PRO", callback_data="ui:upgrade")],
@@ -87,13 +104,21 @@ def _teaser_markup() -> InlineKeyboardMarkup:
     )
 
 
+def _normalize_reason(reason: str) -> str:
+    normalized = str(reason or "").strip().lower()
+    if normalized in TEASER_ALLOWED_REASONS:
+        return normalized
+    return TEASER_REASON_OTHER
+
+
 def _teaser_text(lead: Lead, match_level: str, reason: str) -> str:
     preview_source = lead.description or lead.title
     preview = _normalize_line(preview_source, max_len=120)
     title = _normalize_line(lead.title, max_len=80)
+    normalized_reason = _normalize_reason(reason)
     value_line = (
         "PRO unlocks LOW leads + more matches."
-        if reason == "min_level"
+        if normalized_reason == TEASER_REASON_MIN_LEVEL
         else "PRO gives unlimited daily leads and unlocks more leads."
     )
     return (
@@ -115,8 +140,7 @@ async def maybe_send_teaser(
     reason: str,
     match_level: str,
 ) -> None:
-    if reason not in {"min_level", "cap"}:
-        return
+    reason = _normalize_reason(reason)
 
     try:
         if db.get_plan(user_id) != "FREE":

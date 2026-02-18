@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 from datetime import datetime, timezone, timedelta
 
@@ -14,6 +15,8 @@ from app.analytics.retention import (
     get_retention_7d_series,
     get_wau_series,
 )
+from app.leads import Lead
+from app.monetization.teaser import _teaser_text
 
 
 def main() -> int:
@@ -37,16 +40,32 @@ def main() -> int:
         db.log_event("checkout_created", user_id=1, plan="FREE")
         db.log_event("payment_confirmed", user_id=1, plan="PRO")
         db.log_event("pro_activated", user_id=1, plan="PRO")
+        # Compact JSON via log_event serializer.
         db.log_event(
             "checkout_completed",
             user_id=5,
             meta={"checkout_session_id": "cs_smoke_123"},
         )
-        db.log_event(
-            "reconcile_probe",
-            user_id=6,
-            ts=(now - timedelta(minutes=2)).isoformat(),
-        )
+        # Spaced JSON inserted directly to ensure formatting variance is handled.
+        with sqlite3.connect(path, uri=False) as conn:
+            conn.execute(
+                """
+                INSERT INTO analytics_events (ts, event, user_id, meta_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    now.isoformat(),
+                    "checkout_completed",
+                    5,
+                    '{"checkout_session_id": "cs_smoke_spaced_456"}',
+                ),
+            )
+            conn.commit()
+
+        recent_now_iso = now.isoformat()
+        recent_old_iso = (now - timedelta(minutes=2)).isoformat()
+        db.log_event("recent_probe_now", user_id=6, ts=recent_now_iso)
+        db.log_event("recent_probe_old", user_id=6, ts=recent_old_iso)
 
         # Multi-day retention/pro-health fixtures.
         db.log_event("lead_sent", user_id=1, ts="2026-02-01T09:00:00+00:00")
@@ -89,12 +108,34 @@ def main() -> int:
         assert blocks["reasons"].get("cap", 0) >= 1
         assert blocks["reasons"].get("cooldown", 0) >= 1
         assert db.has_event_with_session(5, "checkout_completed", "cs_smoke_123") is True
+        assert db.has_event_with_session(5, "checkout_completed", "cs_smoke_spaced_456") is True
         assert db.has_event_with_session(5, "checkout_completed", "cs_other") is False
-        assert db.has_recent_event(6, "reconcile_probe", within_minutes=5) is True
-        assert db.has_recent_event(6, "reconcile_probe", within_minutes=1) is False
+        assert db.has_recent_event(6, "recent_probe_now", within_minutes=1) is True
+        assert db.has_recent_event(6, "recent_probe_old", within_minutes=1) is False
+        assert db.has_recent_event(6, "recent_probe_old", within_minutes=3) is True
+        assert db.has_recent_event(6, "recent_probe_old", within_minutes=0) is False
+
+        # Stored timestamps are ISO-8601 UTC strings with offsets, so lexical compare works.
+        with sqlite3.connect(path, uri=False) as conn:
+            ts_row = conn.execute(
+                "SELECT ts FROM analytics_events WHERE event = 'recent_probe_now' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        assert ts_row and str(ts_row[0]).endswith("+00:00")
 
         sources = db.get_source_stats(since, until, limit=10)
         assert isinstance(sources, list)
+
+        sample_lead = Lead(
+            title="Backend Engineer",
+            description="Python and SQL required",
+            budget=None,
+            source="smoke",
+            url=None,
+        )
+        text_min_level = _teaser_text(sample_lead, "LOW", "min_level")
+        text_other = _teaser_text(sample_lead, "LOW", "quota")
+        assert "PRO unlocks LOW leads + more matches." in text_min_level
+        assert "PRO gives unlimited daily leads and unlocks more leads." in text_other
 
         since_ret = "2026-02-01T00:00:00+00:00"
         until_ret = "2026-02-11T00:00:00+00:00"
