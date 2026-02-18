@@ -6,32 +6,24 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.db import (
-    get_daily_usage,
-    get_plan,
-    get_user_settings,
-    set_user_min_level,
-    utc_day,
-)
+from app.db import get_daily_usage, get_plan, get_user_settings, set_user_min_skill_matches, utc_day
 from app.gating import FREE_DAILY_CAP, effective_cap
 
 router = Router()
 
 
 def _upgrade_tip() -> str:
-    return "Upgrade to PRO to customize match level and unlock unlimited daily leads."
+    return "Upgrade to PRO for unlimited daily leads."
 
 
 @router.message(Command("settings"))
 async def handle_settings(message: Message) -> None:
     user_id = message.from_user.id
     plan = get_plan(user_id)
-    min_level, _ = get_user_settings(user_id)
+    min_skill_matches, _ = get_user_settings(user_id)
     day = utc_day()
     used_today = get_daily_usage(user_id, day)
     daily_limit = effective_cap(plan, None)
-    if plan == "FREE":
-        min_level = "MEDIUM"
 
     limit_text = "Unlimited" if daily_limit is None else str(daily_limit)
     if plan == "FREE":
@@ -39,33 +31,29 @@ async def handle_settings(message: Message) -> None:
 
     lines = [
         f"Plan: {plan}",
-        f"Min level: {min_level}",
+        f"Minimum skill matches: {int(min_skill_matches)}",
         f"Daily lead limit: {limit_text}",
         f"Used today: {used_today}",
     ]
-    if plan == "FREE":
-        lines.append(_upgrade_tip())
 
     await message.answer("\n".join(lines))
 
 
-@router.message(Command("set_min_level"))
+@router.message(Command("set_min_matches", "set_min_level"))
 async def handle_set_min_level(message: Message) -> None:
-    plan = get_plan(message.from_user.id)
-    if plan != "PRO":
-        await message.answer(_upgrade_tip())
-        return
-
     parts = (message.text or "").split()
     if len(parts) < 2:
-        await message.answer("Usage: /set_min_level LOW|MEDIUM|HIGH")
+        await message.answer("Usage: /set_min_matches <N>")
         return
 
-    level = parts[1].upper().strip()
-    try:
-        set_user_min_level(message.from_user.id, level)
-    except ValueError:
-        await message.answer("Min level must be LOW, MEDIUM, or HIGH.")
+    if not parts[1].isdigit():
+        await message.answer("Minimum skill matches must be a number from 1 to 20.")
+        return
+    value = int(parts[1])
+    if value < 1 or value > 20:
+        await message.answer("Minimum skill matches must be a number from 1 to 20.")
         return
 
-    await message.answer(f"Min level set to {level}.")
+    set_user_min_skill_matches(message.from_user.id, value)
+
+    await message.answer(f"Minimum skill matches set to {value}.")

@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
 from app import db
-from app.gating import FREE_DAILY_CAP, effective_cap
+from app.gating import effective_cap
 from app.ui.settings_screen import settings_kb, settings_text
 from app.ui.state import UI_MESSAGE_ID, render_ui_message
 from app.ui.skills_picker import ACTIVE_SKILL_PICKERS
@@ -27,12 +27,10 @@ def _clear_picker_awaiting_custom(user_id: int) -> None:
         state["awaiting_custom"] = False
 
 
-def _effective_display_settings(user_id: int) -> tuple[str, str, int | None]:
+def _effective_display_settings(user_id: int) -> tuple[str, int, int | None]:
     plan = db.get_plan(user_id)
-    min_level, _ = db.get_user_settings(user_id)
-    if plan == "FREE":
-        return plan, "MEDIUM", FREE_DAILY_CAP
-    return plan, min_level, effective_cap(plan, None)
+    min_skill_matches, _ = db.get_user_settings(user_id)
+    return plan, int(min_skill_matches), effective_cap(plan, None)
 
 
 async def _render_settings(
@@ -40,24 +38,22 @@ async def _render_settings(
     *,
     notice: str | None = None,
     saved: bool = False,
-    locked_hint: bool = False,
 ) -> None:
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id if isinstance(callback.message, Message) else user_id
     if isinstance(callback.message, Message):
         UI_MESSAGE_ID[user_id] = callback.message.message_id
-    plan, min_level, daily_limit = _effective_display_settings(user_id)
+    plan, min_skill_matches, daily_limit = _effective_display_settings(user_id)
     text = settings_text(
         callback.from_user,
         plan,
-        min_level,
+        min_skill_matches,
         daily_limit,
         saved=saved,
-        locked_hint=locked_hint,
     )
     if notice:
         text = f"{text}\n\n{notice}"
-    markup = settings_kb(plan, min_level, daily_limit)
+    markup = settings_kb(plan, min_skill_matches, daily_limit)
     await render_ui_message(
         callback.bot,
         chat_id=chat_id,
@@ -77,26 +73,21 @@ async def handle_ui_settings(callback: CallbackQuery) -> None:
         await callback.answer()
 
 
-@router.callback_query(F.data.startswith("set:min:"))
+@router.callback_query(F.data.startswith("set:min_skill_matches:"))
 async def handle_set_min(callback: CallbackQuery) -> None:
     try:
         _seed_ui_anchor(callback)
         user_id = callback.from_user.id
-        plan = db.get_plan(user_id)
-        level = (callback.data or "").split("set:min:", 1)[1].strip().upper()
-        if level not in {"LOW", "MEDIUM", "HIGH"}:
-            await _render_settings(callback, notice="Invalid level.")
+        raw_value = (callback.data or "").split("set:min_skill_matches:", 1)[1].strip()
+        if not raw_value.isdigit():
+            await _render_settings(callback, notice="Invalid value.")
             return
-        if plan != "PRO":
-            await _render_settings(callback, locked_hint=True)
+        min_skill_matches = int(raw_value)
+        if min_skill_matches < 3 or min_skill_matches > 8:
+            await _render_settings(callback, notice="Choose a value from 3 to 8.")
             return
 
-        db.set_user_min_level(user_id, level)
+        db.set_user_min_skill_matches(user_id, min_skill_matches)
         await _render_settings(callback, saved=True)
     finally:
-        plan = db.get_plan(callback.from_user.id)
-        if plan != "PRO":
-            await callback.answer("PRO only")
-        else:
-            await callback.answer()
-
+        await callback.answer()

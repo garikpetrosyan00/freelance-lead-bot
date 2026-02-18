@@ -85,13 +85,14 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
         except ValueError:
             pass
 
-    match_level = match.get("level", "NONE")
+    match_level = str(match.get("level", "NONE"))
+    overlap_count = len(match.get("matched") or [])
     day = utc_day()
     sent_today = get_daily_usage(user_id, day)
-    min_level, _ = get_user_settings(user_id)
+    min_skill_matches, _ = get_user_settings(user_id)
     cap = effective_cap(plan, None)
     allowed, reason = can_send_notification(
-        plan, match_level, sent_today, min_level, cap
+        plan, overlap_count, sent_today, min_skill_matches, cap
     )
     if not allowed:
         log_kv(
@@ -101,13 +102,13 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
             user=mask_user_id(user_id),
             reason=reason,
             plan=plan,
-            level=match_level,
+            overlap=overlap_count,
         )
         blocked_reason = (
             "cap"
             if reason == "daily_cap_reached"
-            else "free_limit"
-            if reason == "level_not_allowed" and plan == "FREE"
+            else "min_skill_matches"
+            if reason == "below_min_skill_matches"
             else reason
         )
         log_event(
@@ -121,8 +122,8 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
         if plan == "FREE":
             if reason == "daily_cap_reached":
                 teaser_reason = "cap"
-            elif reason in {"level_not_allowed", "below_min_level"}:
-                teaser_reason = "min_level"
+            elif reason == "below_min_skill_matches":
+                teaser_reason = "min_skill_matches"
         if teaser_reason is not None:
             await maybe_send_teaser(
                 bot=bot,
@@ -132,6 +133,8 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
                 lead=lead,
                 reason=teaser_reason,
                 match_level=str(match_level or "NONE"),
+                required_matches=int(min_skill_matches),
+                found_matches=int(overlap_count),
             )
         return False
 

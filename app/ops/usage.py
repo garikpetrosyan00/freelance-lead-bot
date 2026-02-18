@@ -21,7 +21,7 @@ def _empty_summary() -> dict[str, Any]:
         "week_blocked": None,
         "daily_limit": None,
         "plan": None,
-        "min_level": None,
+        "min_skill_matches": None,
     }
 
 
@@ -98,9 +98,9 @@ async def get_usage_summary(db, user_id: int) -> dict[str, Any]:
 
     try:
         plan = db.get_plan(user_id)
-        min_level, _ = db.get_user_settings(user_id)
+        min_skill_matches, _ = db.get_user_settings(user_id)
         summary["plan"] = plan
-        summary["min_level"] = min_level
+        summary["min_skill_matches"] = int(min_skill_matches)
         summary["daily_limit"] = effective_cap(plan, None)
     except Exception as exc:
         logger.warning("Failed to read plan/settings for usage summary", exc_info=True)

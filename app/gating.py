@@ -5,18 +5,6 @@ from __future__ import annotations
 FREE_DAILY_CAP = 3
 
 
-def allowed_match_levels(plan: str) -> set[str]:
-    plan = plan.upper().strip()
-    if plan == "PRO":
-        return {"LOW", "MEDIUM", "HIGH"}
-    return {"MEDIUM", "HIGH"}
-
-
-def level_rank(level: str) -> int:
-    level = level.upper().strip()
-    return {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}.get(level, 0)
-
-
 def effective_cap(plan: str, user_cap: int | None) -> int | None:
     _ = user_cap  # daily cap is fixed by plan in the simplified model
     plan = plan.upper().strip()
@@ -28,23 +16,20 @@ def effective_cap(plan: str, user_cap: int | None) -> int | None:
     return cap
 
 
-def passes_min_level(match_level: str, min_level: str) -> bool:
-    return level_rank(match_level) >= level_rank(min_level)
+def passes_min_skill_matches(overlap_count: int, min_skill_matches: int) -> bool:
+    return int(overlap_count) >= max(1, int(min_skill_matches))
 
 
 def can_send_notification(
     plan: str,
-    match_level: str,
+    overlap_count: int,
     sent_today: int,
-    min_level: str,
+    min_skill_matches: int,
     cap: int | None,
 ) -> tuple[bool, str]:
-    allowed_levels = allowed_match_levels(plan)
-    if match_level not in allowed_levels:
-        return False, "level_not_allowed"
-
-    if not passes_min_level(match_level, min_level):
-        return False, "below_min_level"
+    _ = plan
+    if not passes_min_skill_matches(overlap_count, min_skill_matches):
+        return False, "below_min_skill_matches"
 
     if cap is not None and sent_today >= cap:
         return False, "daily_cap_reached"

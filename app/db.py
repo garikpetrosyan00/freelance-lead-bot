@@ -31,6 +31,12 @@ STARTUP_BUSY_SLEEP_SECONDS = 0.5
 ERROR_EVENT_MESSAGE_MAX_LEN = 300
 MAX_ERROR_CONTEXT_BYTES = 8192
 ERROR_DEDUPE_WINDOW_SECONDS = 300
+DEFAULT_MIN_SKILL_MATCHES = 3
+LEGACY_MIN_LEVEL_TO_SKILL_MATCHES = {
+    "LOW": 3,
+    "MEDIUM": 4,
+    "HIGH": 5,
+}
 
 
 def _connect() -> sqlite3.Connection:
@@ -220,11 +226,14 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id INTEGER PRIMARY KEY,
                 min_level TEXT NOT NULL,
+                min_skill_matches INTEGER,
                 daily_cap INTEGER,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        if not _column_exists(conn, "user_settings", "min_skill_matches"):
+            conn.execute("ALTER TABLE user_settings ADD COLUMN min_skill_matches INTEGER")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS upgrade_requests (
@@ -2006,34 +2015,57 @@ def mark_seen_lead(user_id: int, lead_hash: str) -> None:
         conn.commit()
 
 
-def get_user_settings(user_id: int) -> tuple[str, int | None]:
+def _legacy_min_level_to_skill_matches(value: str | None) -> int:
+    normalized = str(value or "").upper().strip()
+    return LEGACY_MIN_LEVEL_TO_SKILL_MATCHES.get(normalized, DEFAULT_MIN_SKILL_MATCHES)
+
+
+def _normalize_min_skill_matches(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_SKILL_MATCHES
+    return max(1, min(parsed, 20))
+
+
+def get_user_settings(user_id: int) -> tuple[int, int | None]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT min_level, daily_cap FROM user_settings WHERE user_id = ?",
+            "SELECT min_level, min_skill_matches, daily_cap FROM user_settings WHERE user_id = ?",
             (user_id,),
         ).fetchone()
     if not row:
-        return "MEDIUM", None
-    min_level = str(row[0]).upper().strip() if row[0] else "MEDIUM"
-    daily_cap = row[1]
-    return min_level or "MEDIUM", int(daily_cap) if daily_cap is not None else None
+        return DEFAULT_MIN_SKILL_MATCHES, None
+    legacy_min_level = str(row[0]).upper().strip() if row[0] else ""
+    min_skill_matches_raw = row[1]
+    min_skill_matches = (
+        _normalize_min_skill_matches(min_skill_matches_raw)
+        if min_skill_matches_raw is not None
+        else _legacy_min_level_to_skill_matches(legacy_min_level)
+    )
+    daily_cap = row[2]
+    return min_skill_matches, int(daily_cap) if daily_cap is not None else None
 
 
 def set_user_min_level(user_id: int, min_level: str) -> None:
-    min_level = min_level.upper().strip()
-    if min_level not in {"LOW", "MEDIUM", "HIGH"}:
-        raise ValueError("min_level must be LOW, MEDIUM, or HIGH")
+    # Backward-compatible bridge from legacy level setting to min_skill_matches.
+    min_skill_matches = _legacy_min_level_to_skill_matches(min_level)
+    set_user_min_skill_matches(user_id, min_skill_matches)
+
+
+def set_user_min_skill_matches(user_id: int, min_skill_matches: int) -> None:
+    normalized = _normalize_min_skill_matches(min_skill_matches)
     now = _utc_now()
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO user_settings (user_id, min_level, daily_cap, updated_at)
-            VALUES (?, ?, NULL, ?)
+            INSERT INTO user_settings (user_id, min_level, min_skill_matches, daily_cap, updated_at)
+            VALUES (?, 'MEDIUM', ?, NULL, ?)
             ON CONFLICT(user_id) DO UPDATE SET
-                min_level=excluded.min_level,
+                min_skill_matches=excluded.min_skill_matches,
                 daily_cap=user_settings.daily_cap,
                 updated_at=excluded.updated_at
             """,
-            (user_id, min_level, now),
+            (user_id, normalized, now),
         )
         conn.commit()

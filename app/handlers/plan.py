@@ -7,8 +7,8 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.config import get_payment_link, get_upgrade_contact
-from app.db import get_daily_usage, get_plan, set_plan, utc_day
-from app.gating import FREE_DAILY_CAP, allowed_match_levels
+from app.db import get_daily_usage, get_plan, get_user_settings, set_plan, utc_day
+from app.gating import FREE_DAILY_CAP
 from app.ops.auth import require_admin
 from app.ops.validation import parse_choice, parse_int
 
@@ -20,8 +20,6 @@ def render_upgrade_text() -> str:
     payment_link = get_payment_link()
     lines = [
         "PRO benefits:",
-        "- LOW alerts",
-        "- Custom min level",
         "- Unlimited daily leads",
         "- Faster cooldown",
     ]
@@ -38,12 +36,12 @@ def render_upgrade_text() -> str:
 async def handle_plan(message: Message) -> None:
     user_id = message.from_user.id
     plan = get_plan(user_id)
-    allowed = ", ".join(sorted(allowed_match_levels(plan)))
+    min_skill_matches, _ = get_user_settings(user_id)
     day = utc_day()
     used = get_daily_usage(user_id, day)
     lines = [
         f"Plan: {plan}",
-        f"Allowed: {allowed}",
+        f"Minimum skill matches: {int(min_skill_matches)}",
     ]
     if plan == "FREE":
         lines.append(f"Daily lead limit: {FREE_DAILY_CAP}")

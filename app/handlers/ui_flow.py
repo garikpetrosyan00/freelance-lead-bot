@@ -100,9 +100,8 @@ async def handle_ui_home(callback: CallbackQuery) -> None:
         _clear_picker_awaiting_custom(user.id)
         usage = await get_usage_summary(db, user.id)
         plan = str(usage.get("plan") or db.get_plan(user.id))
-        min_level, _ = db.get_user_settings(user.id)
-        effective_min_level = "MEDIUM" if plan == "FREE" else min_level
-        usage["min_level"] = str(usage.get("min_level") or effective_min_level)
+        min_skill_matches, _ = db.get_user_settings(user.id)
+        usage["min_skill_matches"] = int(usage.get("min_skill_matches") or min_skill_matches)
         text = home_text(user, plan, usage)
         await _edit_or_send(callback, text, reply_markup=home_kb(plan))
     finally:
@@ -129,7 +128,8 @@ async def handle_ui_usage(callback: CallbackQuery) -> None:
         _clear_picker_awaiting_custom(user_id)
         usage = await get_usage_summary(db, user_id)
         plan = str(usage.get("plan") or db.get_plan(user_id))
-        min_level = str(usage.get("min_level") or "—")
+        min_skill_matches = usage.get("min_skill_matches")
+        min_skill_matches_text = str(min_skill_matches) if isinstance(min_skill_matches, int) else "—"
 
         today_sent = _value_or_dash(usage.get("today_sent"))
         today_blocked = _value_or_dash(usage.get("today_blocked"))
@@ -139,12 +139,12 @@ async def handle_ui_usage(callback: CallbackQuery) -> None:
 
         lines = [
             f"Plan: {plan}",
-            f"Min level: {min_level}",
+            f"Minimum skill matches: {min_skill_matches_text}",
             f"Today: {today_sent} sent / {today_blocked} blocked • Daily limit: {daily_limit_text}",
             f"Last 7 days: {week_sent} sent / {week_blocked} blocked",
         ]
         if plan == "FREE":
-            lines.append("Upgrade to PRO for unlimited daily leads and LOW matches.")
+            lines.append("Upgrade to PRO for unlimited daily leads.")
         elif today_sent == "—" and today_blocked == "—" and week_sent == "—" and week_blocked == "—":
             lines.append("No usage data yet.")
         text = "\n".join(lines)
@@ -211,7 +211,7 @@ async def handle_ui_upgrade(callback: CallbackQuery) -> None:
             )
             text = (
                 "Upgrade to PRO in one click.\n"
-                "Use secure checkout to unlock LOW leads and higher limits.\n"
+                "Use secure checkout for unlimited daily leads.\n"
                 "After payment, tap Return to Telegram to come back here."
             )
             await _edit_or_send(callback, text, reply_markup=_upgrade_checkout_kb(checkout_url))

@@ -18,12 +18,12 @@ else:  # pragma: no cover - optional import for smoke scripts without aiogram
     InlineKeyboardMarkup = Any
 
 TEASER_DAILY_LIMIT = 2
-TEASER_REASON_MIN_LEVEL = "min_level"
+TEASER_REASON_MIN_SKILL_MATCHES = "min_skill_matches"
 TEASER_REASON_CAP = "cap"
 TEASER_REASON_QUOTA = "quota"
 TEASER_REASON_OTHER = "other"
 TEASER_ALLOWED_REASONS = {
-    TEASER_REASON_MIN_LEVEL,
+    TEASER_REASON_MIN_SKILL_MATCHES,
     TEASER_REASON_CAP,
     TEASER_REASON_QUOTA,
     TEASER_REASON_OTHER,
@@ -111,21 +111,38 @@ def _normalize_reason(reason: str) -> str:
     return TEASER_REASON_OTHER
 
 
-def _teaser_text(lead: Lead, match_level: str, reason: str) -> str:
+def _teaser_text(
+    lead: Lead,
+    match_level: str,
+    reason: str,
+    *,
+    required_matches: int | None = None,
+    found_matches: int | None = None,
+) -> str:
     preview_source = lead.description or lead.title
     preview = _normalize_line(preview_source, max_len=120)
     title = _normalize_line(lead.title, max_len=80)
     normalized_reason = _normalize_reason(reason)
+    requirement_line = ""
+    if (
+        normalized_reason == TEASER_REASON_MIN_SKILL_MATCHES
+        and required_matches is not None
+        and found_matches is not None
+    ):
+        requirement_line = (
+            f"Not enough matching skills (need {int(required_matches)}, found {int(found_matches)}).\n"
+        )
     value_line = (
-        "PRO unlocks LOW leads + more matches."
-        if normalized_reason == TEASER_REASON_MIN_LEVEL
+        "Tune your minimum skill matches to receive more leads."
+        if normalized_reason == TEASER_REASON_MIN_SKILL_MATCHES
         else "PRO gives unlimited daily leads and unlocks more leads."
     )
     return (
         "🔒 Lead locked\n"
-        f"Level: {match_level}\n"
+        f"Match: {match_level}\n"
         f"Title: {title}\n"
         f"Preview: {preview}\n"
+        f"{requirement_line}"
         f"{value_line}\n"
         "FREE: 3/day. PRO: Unlimited."
     )
@@ -139,6 +156,8 @@ async def maybe_send_teaser(
     lead: Lead,
     reason: str,
     match_level: str,
+    required_matches: int | None = None,
+    found_matches: int | None = None,
 ) -> None:
     reason = _normalize_reason(reason)
 
@@ -161,7 +180,13 @@ async def maybe_send_teaser(
     try:
         await bot.send_message(
             chat_id=chat_id,
-            text=_teaser_text(lead, str(match_level or "NONE"), reason),
+            text=_teaser_text(
+                lead,
+                str(match_level or "NONE"),
+                reason,
+                required_matches=required_matches,
+                found_matches=found_matches,
+            ),
             reply_markup=markup,
         )
     except Exception as exc:

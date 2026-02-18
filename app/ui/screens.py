@@ -29,19 +29,18 @@ def home_text(user: User, plan: str, usage_summary: dict[str, Any] | None) -> st
     summary = usage_summary or {}
     plan_upper = (plan or "").upper().strip()
     plan_label = "🆓 FREE" if plan_upper == "FREE" else "💼 PRO" if plan_upper == "PRO" else f"📦 {plan_upper or '—'}"
-    min_level = str(summary.get("min_level") or "—").upper()
+    min_skill_matches = summary.get("min_skill_matches")
+    min_skill_matches_text = str(min_skill_matches) if isinstance(min_skill_matches, int) else "—"
     today_sent = _fmt_usage_value(summary.get("today_sent"))
     today_blocked = _fmt_usage_value(summary.get("today_blocked"))
     daily_limit = _fmt_daily_limit(summary.get("daily_limit"), plan_upper)
     lines = [
         "🏠 Home Dashboard",
         f"Plan: {plan_label}",
-        f"Min level: {min_level}",
+        f"Minimum skill matches: {min_skill_matches_text}",
         f"Daily lead limit: {daily_limit}",
         f"Today usage: {today_sent} sent / {today_blocked} blocked",
     ]
-    if plan_upper == "PRO" and min_level == "LOW":
-        lines.append("🚀 Maximum lead coverage enabled")
     return "\n".join(lines)
 
 

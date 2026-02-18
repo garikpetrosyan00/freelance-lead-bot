@@ -15,7 +15,9 @@ from app.analytics.retention import (
     get_retention_7d_series,
     get_wau_series,
 )
+from app.gating import can_send_notification, effective_cap
 from app.leads import Lead
+from app.matching import match_lead
 from app.monetization.teaser import _teaser_text
 
 
@@ -48,6 +50,12 @@ def main() -> int:
         now = datetime.now(timezone.utc)
         since = (now - timedelta(days=1)).isoformat()
         until = (now + timedelta(days=1)).isoformat()
+
+        default_min_skill_matches, _ = db.get_user_settings(42)
+        assert int(default_min_skill_matches) == 3
+        db.set_user_min_skill_matches(42, 5)
+        updated_min_skill_matches, _ = db.get_user_settings(42)
+        assert int(updated_min_skill_matches) == 5
 
         db.log_event("lead_ingested", lead_id="lead1")
         db.log_event("lead_ingested", lead_id="lead2", meta={"source": "telegram"})
@@ -164,14 +172,52 @@ def main() -> int:
             source="smoke",
             url=None,
         )
-        text_min_level = _teaser_text(sample_lead, "LOW", "min_level")
+        text_min_level = _teaser_text(
+            sample_lead,
+            "LOW",
+            "min_skill_matches",
+            required_matches=3,
+            found_matches=2,
+        )
         text_other = _teaser_text(sample_lead, "LOW", "quota")
-        assert "PRO unlocks LOW leads + more matches." in text_min_level
+        assert "Not enough matching skills (need 3, found 2)." in text_min_level
+        assert "Tune your minimum skill matches to receive more leads." in text_min_level
         assert "PRO gives unlimited daily leads and unlocks more leads." in text_other
         assert "cap" not in text_min_level.lower()
         assert "cap" not in text_other.lower()
         assert "FREE: 3/day. PRO: Unlimited." in text_min_level
         assert "FREE: 3/day. PRO: Unlimited." in text_other
+
+        user_skills = ["python", "django", "react", "postgresql", "docker"]
+        min_required = 3
+        lead_overlap_2 = Lead(
+            title="Need Python and React developer",
+            description="Short task",
+            budget=None,
+            source="smoke",
+            url=None,
+        )
+        lead_overlap_3 = Lead(
+            title="Need Python Django React engineer",
+            description="Medium task",
+            budget=None,
+            source="smoke",
+            url=None,
+        )
+        lead_overlap_5 = Lead(
+            title="Python Django React PostgreSQL Docker expert",
+            description="Complex task",
+            budget=None,
+            source="smoke",
+            url=None,
+        )
+        overlap_2 = len(match_lead(user_skills, lead_overlap_2).get("matched") or [])
+        overlap_3 = len(match_lead(user_skills, lead_overlap_3).get("matched") or [])
+        overlap_5 = len(match_lead(user_skills, lead_overlap_5).get("matched") or [])
+        free_cap = effective_cap("FREE", None)
+        assert can_send_notification("FREE", overlap_2, sent_today=0, min_skill_matches=min_required, cap=free_cap)[0] is False
+        assert can_send_notification("FREE", overlap_3, sent_today=0, min_skill_matches=min_required, cap=free_cap)[0] is True
+        assert can_send_notification("FREE", overlap_5, sent_today=0, min_skill_matches=5, cap=free_cap)[0] is True
 
         since_ret = "2026-02-01T00:00:00+00:00"
         until_ret = "2026-02-11T00:00:00+00:00"

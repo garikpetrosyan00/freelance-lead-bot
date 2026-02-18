@@ -49,11 +49,11 @@ def _render_username(username: str | None) -> str:
 
 def _settings_snapshot_json(user_id: int, username: str | None) -> str:
     plan = get_user_plan(user_id)
-    min_level, _ = get_user_settings(user_id)
+    min_skill_matches, _ = get_user_settings(user_id)
     return json.dumps(
         {
             "plan": plan,
-            "min_level": min_level,
+            "min_skill_matches": int(min_skill_matches),
             "daily_limit": None if plan == "PRO" else FREE_DAILY_CAP,
             "free_daily_cap": FREE_DAILY_CAP,
             "username": username,
