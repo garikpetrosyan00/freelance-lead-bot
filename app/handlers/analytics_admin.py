@@ -206,6 +206,33 @@ async def handle_funnel_7d(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("funnel"))
+async def handle_funnel(message: Message) -> None:
+    if not await require_admin(message):
+        return
+
+    since_iso, until_iso = rolling_days_window_utc(7)
+    counts = get_event_counts(None, since_iso, until_iso)
+
+    upgrade_clicked = int(counts.get("upgrade_clicked", 0))
+    checkout_presented = int(counts.get("checkout_presented", 0))
+    checkout_completed = int(counts.get("checkout_completed", 0))
+    pro_activated = int(counts.get("pro_activated", 0))
+
+    lines = [
+        "📈 Funnel (last 7 days)",
+        f"- upgrade_clicked: {upgrade_clicked}",
+        f"- checkout_presented: {checkout_presented}",
+        f"- checkout_completed: {checkout_completed}",
+        f"- pro_activated: {pro_activated}",
+        "Conversion:",
+        f"- upgrade→presented: {_pct(checkout_presented, upgrade_clicked)}",
+        f"- presented→completed: {_pct(checkout_completed, checkout_presented)}",
+        f"- completed→activated: {_pct(pro_activated, checkout_completed)}",
+    ]
+    await message.answer("\n".join(lines))
+
+
 @router.message(Command("lead_quality_7d"))
 async def handle_lead_quality_7d(message: Message) -> None:
     if not await require_admin(message):

@@ -90,6 +90,10 @@ def enable_telegram_ingestion() -> bool:
     return _get_env_bool("ENABLE_TELEGRAM_INGESTION", True)
 
 
+def demo_mode_enabled() -> bool:
+    return _get_env_bool("DEMO_MODE", False)
+
+
 def get_upgrade_contact() -> str:
     contact = os.getenv("UPGRADE_CONTACT", "@your_username").strip()
     return contact or "@your_username"
@@ -114,8 +118,12 @@ def get_webhook_port() -> int:
 
 
 def get_stripe_secret_key() -> str | None:
-    value = os.getenv("STRIPE_SECRET_KEY", "").strip()
-    return value or None
+    # Canonical var: STRIPE_SECRET. Keep legacy STRIPE_SECRET_KEY for backward compatibility.
+    primary = os.getenv("STRIPE_SECRET", "").strip()
+    if primary:
+        return primary
+    legacy = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    return legacy or None
 
 
 def get_stripe_webhook_secret() -> str | None:

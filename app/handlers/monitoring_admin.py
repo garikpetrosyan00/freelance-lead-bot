@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router
@@ -11,9 +12,11 @@ from aiogram.filters.command import CommandObject
 from aiogram.types import Message
 
 from app import db
+from app.config import demo_mode_enabled, enable_telegram_ingestion
 from app.monitoring import clear_silence, get_health_snapshot, get_recent_alerts, get_silence_until, set_silence
 from app.ops.auth import require_admin, require_super_admin
 from app.ops.validation import parse_int, validate_alert_type, validate_limit
+from app.version import version_text
 
 router = Router()
 
@@ -169,6 +172,29 @@ def _format_diag(hours: int) -> list[str]:
     return lines
 
 
+def _present(value: str | None) -> str:
+    return "yes" if bool((value or "").strip()) else "no"
+
+
+def _db_exists() -> str:
+    if db.DB_URI or db.DB_PATH == ":memory:":
+        return "n/a"
+    return "yes" if os.path.exists(db.DB_PATH) else "no"
+
+
+def _git_commit_short() -> str | None:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        ).strip()
+    except Exception:
+        return None
+    return out or None
+
+
 @router.message(Command("health"))
 async def handle_health(message: Message) -> None:
     if not await require_admin(message):
@@ -270,3 +296,43 @@ async def handle_unsilence(message: Message, command: CommandObject) -> None:
         await message.answer(f"Unsilenced '{alert_type}' (previous until: {previous}).")
         return
     await message.answer(f"Unsilenced '{alert_type}'.")
+
+
+@router.message(Command("doctor"))
+async def handle_doctor(message: Message) -> None:
+    if not await require_admin(message):
+        return
+
+    demo_mode = demo_mode_enabled()
+    telegram_ingestion = enable_telegram_ingestion() and not demo_mode
+    tg_api_id_present = _present(os.getenv("TG_API_ID"))
+    tg_api_hash_present = _present(os.getenv("TG_API_HASH"))
+    stripe_secret_canonical_present = _present(os.getenv("STRIPE_SECRET"))
+    stripe_secret_legacy_present = _present(os.getenv("STRIPE_SECRET_KEY"))
+    stripe_secret_present = "yes" if (
+        stripe_secret_canonical_present == "yes" or stripe_secret_legacy_present == "yes"
+    ) else "no"
+    stripe_webhook_secret_present = _present(os.getenv("STRIPE_WEBHOOK_SECRET"))
+    stripe_enabled = (not demo_mode) and stripe_secret_present == "yes" and stripe_webhook_secret_present == "yes"
+    now_local = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    commit = _git_commit_short()
+
+    lines = [
+        "🩺 Doctor",
+        f"DEMO_MODE: {'ON' if demo_mode else 'OFF'}",
+        f"Telegram ingestion: {'enabled' if telegram_ingestion else 'disabled'}",
+        f"TG_API_ID present: {tg_api_id_present}",
+        f"TG_API_HASH present: {tg_api_hash_present}",
+        f"Stripe: {'enabled' if stripe_enabled else 'disabled'}",
+        f"STRIPE_SECRET present: {stripe_secret_present}",
+        f"STRIPE_SECRET_KEY legacy set: {stripe_secret_legacy_present}",
+        f"STRIPE_WEBHOOK_SECRET present: {stripe_webhook_secret_present}",
+        f"DB path: {db.DB_PATH}",
+        f"DB exists: {_db_exists()}",
+        f"Local time: {now_local}",
+    ]
+    if commit:
+        lines.append(f"Commit: {commit}")
+    lines.append(f"Version: {version_text()}")
+
+    await message.answer("\n".join(lines))

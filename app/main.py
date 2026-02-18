@@ -13,6 +13,7 @@ from app import db
 from app.analytics import log_event
 from app.db import expire_overdue_pro_users, record_error
 from app.config import (
+    demo_mode_enabled,
     enable_fake_ingestion,
     enable_telegram_ingestion,
     load_config,
@@ -105,6 +106,7 @@ async def run_pro_expiry_loop(bot: Bot, interval_seconds: int = PRO_EXPIRY_CHECK
 async def main() -> None:
     configure_logging()
     logger = logging.getLogger(__name__)
+    demo_mode = demo_mode_enabled()
 
     token = load_config()
     stripe_webhook_enabled, _ = is_stripe_webhook_enabled()
@@ -140,49 +142,53 @@ async def main() -> None:
 
     tasks: list[asyncio.Task] = []
 
+    if demo_mode:
+        logger.warning("DEMO_MODE enabled: external integrations disabled")
+
     if enable_fake_ingestion():
         tasks.append(asyncio.create_task(run_fake_ingestion(bot)))
         logger.info("Fake ingestion enabled")
 
-    if enable_telegram_ingestion():
+    if not demo_mode and enable_telegram_ingestion():
         telethon_task = asyncio.create_task(run_telegram_listener(bot))
         telethon_task.add_done_callback(_log_task_failure)
         tasks.append(telethon_task)
         logger.info("Telegram ingestion enabled")
 
-    webhook_ready: asyncio.Event | None = asyncio.Event() if stripe_webhook_enabled else None
-    webhook_task = asyncio.create_task(run_stripe_webhook_server(bot, ready=webhook_ready))
-    webhook_task.add_done_callback(_log_task_failure)
-    tasks.append(webhook_task)
-    if stripe_webhook_enabled:
-        ready_wait_task = asyncio.create_task(webhook_ready.wait())
-        done, _ = await asyncio.wait(
-            {ready_wait_task, webhook_task},
-            timeout=5.0,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        started = ready_wait_task in done and webhook_ready.is_set()
-        if not started:
-            if webhook_task in done:
-                try:
-                    webhook_task.result()
-                except BaseException as exc:
-                    logger.exception("Stripe webhook failed to start - aborting", exc_info=exc)
-            else:
-                logger.error("Stripe webhook failed to start - aborting")
-            for task in tasks:
-                task.cancel()
-            for task in tasks:
-                with suppress(BaseException):
-                    await task
+    if not demo_mode:
+        webhook_ready: asyncio.Event | None = asyncio.Event() if stripe_webhook_enabled else None
+        webhook_task = asyncio.create_task(run_stripe_webhook_server(bot, ready=webhook_ready))
+        webhook_task.add_done_callback(_log_task_failure)
+        tasks.append(webhook_task)
+        if stripe_webhook_enabled:
+            ready_wait_task = asyncio.create_task(webhook_ready.wait())
+            done, _ = await asyncio.wait(
+                {ready_wait_task, webhook_task},
+                timeout=5.0,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            started = ready_wait_task in done and webhook_ready.is_set()
+            if not started:
+                if webhook_task in done:
+                    try:
+                        webhook_task.result()
+                    except BaseException as exc:
+                        logger.exception("Stripe webhook failed to start - aborting", exc_info=exc)
+                else:
+                    logger.error("Stripe webhook failed to start - aborting")
+                for task in tasks:
+                    task.cancel()
+                for task in tasks:
+                    with suppress(BaseException):
+                        await task
+                ready_wait_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await ready_wait_task
+                await bot.session.close()
+                raise SystemExit(1)
             ready_wait_task.cancel()
             with suppress(asyncio.CancelledError):
                 await ready_wait_task
-            await bot.session.close()
-            raise SystemExit(1)
-        ready_wait_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await ready_wait_task
 
     monitor_task = asyncio.create_task(run_monitor_loop(bot))
     monitor_task.add_done_callback(_log_task_failure)

@@ -21,11 +21,13 @@ def _iso_ago(*, hours: int = 0, minutes: int = 0) -> str:
 
 
 def main() -> int:
-    old_secret = os.environ.get("STRIPE_SECRET_KEY")
+    old_secret = os.environ.get("STRIPE_SECRET")
+    old_secret_legacy = os.environ.get("STRIPE_SECRET_KEY")
     old_webhook = os.environ.get("STRIPE_WEBHOOK_SECRET")
     old_db_path = db.DB_PATH
     old_db_uri = db.DB_URI
-    os.environ["STRIPE_SECRET_KEY"] = "sk_test_smoke"
+    os.environ["STRIPE_SECRET"] = "sk_test_smoke"
+    os.environ.pop("STRIPE_SECRET_KEY", None)
     os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_smoke"
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -99,9 +101,13 @@ def main() -> int:
     finally:
         db.configure_db(old_db_path, uri=old_db_uri)
         if old_secret is None:
+            os.environ.pop("STRIPE_SECRET", None)
+        else:
+            os.environ["STRIPE_SECRET"] = old_secret
+        if old_secret_legacy is None:
             os.environ.pop("STRIPE_SECRET_KEY", None)
         else:
-            os.environ["STRIPE_SECRET_KEY"] = old_secret
+            os.environ["STRIPE_SECRET_KEY"] = old_secret_legacy
         if old_webhook is None:
             os.environ.pop("STRIPE_WEBHOOK_SECRET", None)
         else:

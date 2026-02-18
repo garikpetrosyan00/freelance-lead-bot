@@ -14,6 +14,8 @@ from app.db import (
     attach_payment_to_upgrade_request,
     decide_upgrade_request,
     get_latest_payment_for_user,
+    has_event_with_session,
+    has_recent_event,
     get_pending_upgrade_request_id,
     get_stripe_subscription_for_user,
     get_upgrade_request_by_id,
@@ -193,16 +195,30 @@ def reconcile_user_payment(user_id: int, force: bool = False) -> ReconcileResult
                     amount_total=int(session.get("amount_total")) if session.get("amount_total") is not None else None,
                     currency=str(session.get("currency") or "") or None,
                 )
-                log_event(
-                    "checkout_completed",
-                    user_id=user_id,
-                    plan="PRO",
-                    meta={
-                        "source": "reconcile:checkout",
-                        "checkout_session_id": checkout_session_id,
-                        "subscription_id": subscription_id_resolved,
-                    },
-                )
+                should_log_checkout_completed = False
+                if checkout_session_id:
+                    should_log_checkout_completed = not has_event_with_session(
+                        user_id=user_id,
+                        event="checkout_completed",
+                        session_id=checkout_session_id,
+                    )
+                else:
+                    should_log_checkout_completed = not has_recent_event(
+                        user_id=user_id,
+                        event="checkout_completed",
+                        within_minutes=10,
+                    )
+                if should_log_checkout_completed:
+                    log_event(
+                        "checkout_completed",
+                        user_id=user_id,
+                        plan="PRO",
+                        meta={
+                            "source": "reconcile:checkout",
+                            "checkout_session_id": checkout_session_id,
+                            "subscription_id": subscription_id_resolved,
+                        },
+                    )
                 log_event(
                     "payment_confirmed",
                     user_id=user_id,
