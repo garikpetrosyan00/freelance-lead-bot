@@ -6,7 +6,7 @@ from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.config import get_payment_link, get_upgrade_contact
+from app.config import get_payment_link, get_support_email
 from app.db import get_daily_usage, get_plan, get_user_settings, set_plan, utc_day
 from app.gating import FREE_DAILY_CAP
 from app.ops.auth import require_admin
@@ -16,7 +16,7 @@ router = Router()
 
 
 def render_upgrade_text() -> str:
-    contact = get_upgrade_contact()
+    support_email = get_support_email()
     payment_link = get_payment_link()
     lines = [
         "PRO benefits:",
@@ -27,7 +27,8 @@ def render_upgrade_text() -> str:
         lines.append(f"Pay here: {payment_link}")
     else:
         lines.append("Payment link coming soon.")
-    lines.append(f"After payment, PRO activates automatically for this Telegram account. Contact: {contact}.")
+    lines.append("After payment, PRO activates automatically for this Telegram account.")
+    lines.append(f"Need help? Email: {support_email}")
     lines.append("Daily lead limit resets by UTC day.")
     return "\n".join(lines)
 

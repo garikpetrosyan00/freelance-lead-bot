@@ -58,5 +58,10 @@ def settings_kb(plan: str, min_skill_matches: int, daily_limit: int | None, skil
             rows.append(buttons[idx : idx + row_size])
     else:
         rows.append([InlineKeyboardButton(text="📌 Skills", callback_data="ui:skills")])
-    rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="ui:home")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="📩 Support", callback_data="ui:support"),
+            InlineKeyboardButton(text="⬅️ Back", callback_data="ui:home"),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -30,6 +30,7 @@ from app.handlers import (
     skills_router,
     skills_picker_router,
     start_router,
+    support_router,
     subscription_router,
     test_lead_router,
     ui_flow_router,
@@ -125,6 +126,7 @@ async def main() -> None:
     dp.message.middleware(RateLimitMiddleware())
     dp.include_router(start_router)
     dp.include_router(ui_flow_router)
+    dp.include_router(support_router)
     dp.include_router(ui_settings_router)
     dp.include_router(skills_router)
     dp.include_router(skills_picker_router)

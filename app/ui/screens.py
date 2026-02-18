@@ -75,6 +75,9 @@ def home_kb(plan: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
                 InlineKeyboardButton(text="ℹ️ Help", callback_data="ui:help"),
             ],
+            [
+                InlineKeyboardButton(text="📩 Support", callback_data="ui:support"),
+            ],
         ]
     else:
         rows = [
@@ -92,6 +95,9 @@ def home_kb(plan: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="📊 Usage", callback_data="ui:usage"),
                 InlineKeyboardButton(text="ℹ️ Help", callback_data="ui:help"),
+            ],
+            [
+                InlineKeyboardButton(text="📩 Support", callback_data="ui:support"),
             ],
         ]
     _assert_unique_home_buttons(rows)

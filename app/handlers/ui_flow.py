@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from app import db
 from app.analytics import log_event
 from app.billing.stripe_checkout import create_checkout_session
-from app.config import get_admin_user_ids
+from app.config import get_admin_chat_id
 from app.handlers.plan import render_upgrade_text
 from app.handlers.test_lead import handle_test_lead
 from app.ops.usage import get_usage_summary
@@ -66,6 +66,7 @@ def _help_text() -> str:
 def _upgrade_back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text="📩 Support", callback_data="ui:support")],
             [InlineKeyboardButton(text="⬅️ Back", callback_data="ui:home")],
         ]
     )
@@ -101,17 +102,26 @@ async def _notify_admins_about_pro_interest(callback: CallbackQuery) -> None:
 
     username = str(user.username or "").strip()
     username_label = f"@{username}" if username else "(no username)"
-    text = f"💳 PRO interest: {username_label} (id={user_id}) clicked Subscribe. Link coming soon."
-    admin_ids = get_admin_user_ids()
-    for admin_id in admin_ids:
-        try:
-            await callback.bot.send_message(chat_id=admin_id, text=text)
-        except Exception as exc:
-            db.record_error(
-                "admin",
-                exc,
-                context={"action": "notify_pro_interest", "admin_id": admin_id, "user_id": user_id},
-            )
+    admin_chat_id = get_admin_chat_id()
+    if admin_chat_id is None:
+        return
+
+    text = (
+        "💳 PRO interest\n"
+        f"User: {username_label}\n"
+        f"Telegram ID: {user_id}\n"
+        "Action: Clicked Subscribe"
+    )
+    try:
+        await callback.bot.send_message(chat_id=admin_chat_id, text=text)
+    except Exception as exc:
+        db.record_error(
+            "admin",
+            exc,
+            context={"action": "notify_pro_interest", "admin_chat_id": admin_chat_id, "user_id": user_id},
+        )
+        return
+
     log_event(
         "pro_interest_admin_notified",
         user_id=user_id,

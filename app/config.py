@@ -78,6 +78,16 @@ def get_admin_user_ids() -> set[int]:
     return ids
 
 
+def get_admin_chat_id() -> int | None:
+    raw = os.getenv("ADMIN_CHAT_ID", "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise RuntimeError("ADMIN_CHAT_ID must be an integer") from exc
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in get_admin_user_ids()
 
@@ -94,9 +104,9 @@ def demo_mode_enabled() -> bool:
     return _get_env_bool("DEMO_MODE", False)
 
 
-def get_upgrade_contact() -> str:
-    contact = os.getenv("UPGRADE_CONTACT", "@your_username").strip()
-    return contact or "@your_username"
+def get_support_email() -> str:
+    value = os.getenv("SUPPORT_EMAIL", "freelanceleadbot@gmail.com").strip()
+    return value or "freelanceleadbot@gmail.com"
 
 
 def get_payment_link() -> str | None:

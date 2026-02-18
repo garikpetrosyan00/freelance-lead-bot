@@ -16,6 +16,7 @@ from .monitoring_admin import router as monitoring_admin_router
 from .upgrade_request import router as upgrade_request_router
 from .ui_flow import router as ui_flow_router
 from .ui_settings import router as ui_settings_router
+from .support import router as support_router
 
 __all__ = [
     "start_router",
@@ -34,4 +35,5 @@ __all__ = [
     "upgrade_request_router",
     "ui_flow_router",
     "ui_settings_router",
+    "support_router",
 ]
