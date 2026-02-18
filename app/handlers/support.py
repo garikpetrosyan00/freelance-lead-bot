@@ -43,6 +43,14 @@ def _support_kb() -> InlineKeyboardMarkup:
     )
 
 
+def _support_compose_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Cancel", callback_data="ui:support:cancel")],
+        ]
+    )
+
+
 def _extract_support_message(message: Message) -> str | None:
     text = (message.text or "").strip()
     if text:
@@ -92,10 +100,25 @@ async def handle_ui_support_compose(callback: CallbackQuery, state: FSMContext) 
             callback.bot,
             chat_id=chat_id,
             user_id=callback.from_user.id,
-            text="Please type your issue in one message.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="⬅ Back", callback_data="ui:support")]]
-            ),
+            text="Please describe your issue in one message.",
+            reply_markup=_support_compose_kb(),
+        )
+    finally:
+        await callback.answer()
+
+
+@router.callback_query(F.data == "ui:support:cancel")
+async def handle_ui_support_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    try:
+        _seed_ui_anchor(callback)
+        await state.clear()
+        chat_id = callback.message.chat.id if isinstance(callback.message, Message) else callback.from_user.id
+        await render_ui_message(
+            callback.bot,
+            chat_id=chat_id,
+            user_id=callback.from_user.id,
+            text=f"{_support_text()}\n\nSupport request canceled.",
+            reply_markup=_support_kb(),
         )
     finally:
         await callback.answer()
@@ -110,6 +133,13 @@ async def handle_support_ticket_message(message: Message, state: FSMContext) -> 
     support_text = _extract_support_message(message)
     if support_text is None:
         await message.answer("Please send your issue as text in one message.")
+        return
+
+    if db.has_recent_event(user_id=user.id, event="support_ticket_created", within_minutes=5):
+        await message.answer(
+            "You've recently contacted support. Please wait a few minutes before sending another message."
+        )
+        await state.clear()
         return
 
     admin_chat_id = get_admin_chat_id()
