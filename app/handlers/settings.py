@@ -11,6 +11,7 @@ from app.db import (
     get_plan,
     get_skills,
     get_user_settings,
+    min_skill_matches_validation_error,
     set_user_min_skill_matches,
     utc_day,
 )
@@ -43,7 +44,7 @@ async def handle_settings(message: Message) -> None:
         f"Used today: {used_today}",
     ]
     if len(get_skills(user_id)) < 3:
-        lines.append("Add more skills to improve matching.")
+        lines.append("Add more skills in Skills to improve matching.")
 
     await message.answer("\n".join(lines))
 
@@ -62,11 +63,10 @@ async def handle_set_min_level(message: Message) -> None:
     if value < 1 or value > 20:
         await message.answer("Minimum skill matches must be a number from 1 to 20.")
         return
-    max_allowed = max(1, len(get_skills(message.from_user.id)))
-    if value > max_allowed:
-        await message.answer(
-            f"You currently have {max_allowed} selected skill(s). Set minimum skill matches to 1-{max_allowed}."
-        )
+    skills_count = len(get_skills(message.from_user.id))
+    validation_error = min_skill_matches_validation_error(value, skills_count)
+    if validation_error is not None:
+        await message.answer(validation_error)
         return
 
     set_user_min_skill_matches(message.from_user.id, value)

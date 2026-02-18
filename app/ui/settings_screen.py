@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, User
 
+from app.db import min_skill_matches_bounds_for_skills_count
+
 
 def _daily_limit_label(daily_limit: int | None) -> str:
     if daily_limit is None:
@@ -31,7 +33,7 @@ def settings_text(
     if saved:
         text = f"{text}\n\n✅ Saved"
     if int(skills_count) < 3:
-        text = f"{text}\n\nAdd more skills to improve matching."
+        text = f"{text}\n\nAdd more skills in Skills to improve matching."
     return text
 
 
@@ -40,13 +42,15 @@ def _min_btn(current: int, value: int) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=f"{prefix}{value}", callback_data=f"set:min_skill_matches:{value}")
 
 
-def settings_kb(plan: str, min_skill_matches: int, daily_limit: int | None, max_skill_matches: int) -> InlineKeyboardMarkup:
+def settings_kb(plan: str, min_skill_matches: int, daily_limit: int | None, skills_count: int) -> InlineKeyboardMarkup:
     _ = (plan, daily_limit)
     rows: list[list[InlineKeyboardButton]] = []
-    safe_max = max(1, int(max_skill_matches))
-    buttons = [_min_btn(min_skill_matches, value) for value in range(1, safe_max + 1)]
+    min_allowed, max_allowed = min_skill_matches_bounds_for_skills_count(skills_count)
+    buttons = [_min_btn(min_skill_matches, value) for value in range(min_allowed, max_allowed + 1)]
     row_size = 5
     for idx in range(0, len(buttons), row_size):
         rows.append(buttons[idx : idx + row_size])
+    if int(skills_count) < 3:
+        rows.append([InlineKeyboardButton(text="📌 Skills", callback_data="ui:skills")])
     rows.append([InlineKeyboardButton(text="⬅️ Back", callback_data="ui:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

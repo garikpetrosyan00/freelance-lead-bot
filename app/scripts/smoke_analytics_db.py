@@ -57,10 +57,41 @@ def main() -> int:
         db.set_user_min_skill_matches(42, 5)
         updated_min_skill_matches, _ = db.get_user_settings(42)
         assert int(updated_min_skill_matches) == 5
+
+        # DB layer still clamps as last line of defense.
         db.set_skills(43, ["python", "react", "sql"])
+        db.set_user_min_skill_matches(43, 3)
+        before_min_skill_matches, _ = db.get_user_settings(43)
+        assert int(before_min_skill_matches) == 3
+        min_allowed_43, max_allowed_43 = db.min_skill_matches_bounds_for_user(43)
+        assert (min_allowed_43, max_allowed_43) == (3, 3)
+        assert db.min_skill_matches_range_message(3) == (
+            "You selected 3 skills, so the maximum is 3. "
+            "Minimum is 3 when you have 3+ skills selected. "
+            "Choose 3-3."
+        )
+
+        # User-facing behavior should reject out-of-range values and keep state unchanged.
+        reject_high_message = db.min_skill_matches_validation_error(5, len(db.get_skills(43)))
+        assert reject_high_message == db.min_skill_matches_range_message(3)
+        after_reject_high, _ = db.get_user_settings(43)
+        assert int(after_reject_high) == 3
+        reject_low_message = db.min_skill_matches_validation_error(2, len(db.get_skills(43)))
+        assert reject_low_message == db.min_skill_matches_range_message(3)
+        after_reject_low, _ = db.get_user_settings(43)
+        assert int(after_reject_low) == 3
+
         db.set_user_min_skill_matches(43, 5)
         clamped_min_skill_matches, _ = db.get_user_settings(43)
         assert int(clamped_min_skill_matches) == 3
+
+        db.set_skills(44, ["python", "sql"])
+        min_allowed_44, max_allowed_44 = db.min_skill_matches_bounds_for_user(44)
+        assert (min_allowed_44, max_allowed_44) == (1, 2)
+        assert db.min_skill_matches_validation_error(2, len(db.get_skills(44))) is None
+        db.set_user_min_skill_matches(44, 2)
+        updated_min_skill_matches_44, _ = db.get_user_settings(44)
+        assert int(updated_min_skill_matches_44) == 2
 
         db.log_event("lead_ingested", lead_id="lead1")
         db.log_event("lead_ingested", lead_id="lead2", meta={"source": "telegram"})

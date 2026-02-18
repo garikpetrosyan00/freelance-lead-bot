@@ -2028,9 +2028,38 @@ def _normalize_min_skill_matches(value: Any) -> int:
     return max(1, min(parsed, 20))
 
 
+def min_skill_matches_bounds_for_skills_count(skills_count: int) -> tuple[int, int]:
+    safe_count = max(0, int(skills_count))
+    max_allowed = max(1, safe_count)
+    min_allowed = 3 if safe_count >= 3 else 1
+    min_allowed = min(min_allowed, max_allowed)
+    return min_allowed, max_allowed
+
+
+def min_skill_matches_bounds_for_user(user_id: int) -> tuple[int, int]:
+    return min_skill_matches_bounds_for_skills_count(len(get_skills(user_id)))
+
+
+def min_skill_matches_range_message(skills_count: int) -> str:
+    min_allowed, max_allowed = min_skill_matches_bounds_for_skills_count(skills_count)
+    return (
+        f"You selected {skills_count} skills, so the maximum is {max_allowed}. "
+        f"Minimum is 3 when you have 3+ skills selected. "
+        f"Choose {min_allowed}-{max_allowed}."
+    )
+
+
+def min_skill_matches_validation_error(value: int, skills_count: int) -> str | None:
+    min_allowed, max_allowed = min_skill_matches_bounds_for_skills_count(skills_count)
+    safe_value = int(value)
+    if safe_value < min_allowed or safe_value > max_allowed:
+        return min_skill_matches_range_message(skills_count)
+    return None
+
+
 def _max_min_skill_matches_for_user(user_id: int) -> int:
-    skills_count = len(get_skills(user_id))
-    return max(1, skills_count)
+    _, max_allowed = min_skill_matches_bounds_for_user(user_id)
+    return max_allowed
 
 
 def get_user_settings(user_id: int) -> tuple[int, int | None]:
