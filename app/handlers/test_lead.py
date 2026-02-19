@@ -13,11 +13,14 @@ from app.matching import match_lead
 router = Router()
 
 
-@router.message(Command("test_lead"))
-async def handle_test_lead(message: Message) -> None:
-    user_skills = get_skills(message.from_user.id)
+async def send_test_lead_preview(
+    *,
+    user_id: int,
+    answer,
+) -> None:
+    user_skills = get_skills(user_id)
     if not user_skills:
-        await message.answer("No skills set yet. Use /set_skills ...")
+        await answer("No skills set yet. Use /set_skills ...")
         return
 
     leads = [
@@ -55,4 +58,12 @@ async def handle_test_lead(message: Message) -> None:
             f"Matched skills: {matched_text}\n"
             f"Source: {lead.source}"
         )
-        await message.answer(text)
+        await answer(text)
+
+
+@router.message(Command("test_lead"))
+async def handle_test_lead(message: Message) -> None:
+    await send_test_lead_preview(
+        user_id=message.from_user.id,
+        answer=message.answer,
+    )

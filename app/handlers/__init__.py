@@ -17,6 +17,7 @@ from .upgrade_request import router as upgrade_request_router
 from .ui_flow import router as ui_flow_router
 from .ui_settings import router as ui_settings_router
 from .support import router as support_router
+from .upwork_alerts import router as upwork_alerts_router
 
 __all__ = [
     "start_router",
@@ -36,4 +37,5 @@ __all__ = [
     "ui_flow_router",
     "ui_settings_router",
     "support_router",
+    "upwork_alerts_router",
 ]

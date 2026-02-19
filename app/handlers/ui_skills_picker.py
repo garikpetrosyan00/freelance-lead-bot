@@ -37,6 +37,24 @@ def _state_or_init(user_id: int, *, force_new: bool = False) -> PickerState:
     return init_picker_state(user_id, saved)
 
 
+def _selected_skills_from_state(state: PickerState) -> list[str]:
+    selected_keys = state["selected"]
+    selected_skills: list[str] = []
+    for skill in state["all"]:
+        if skill.lower() in selected_keys:
+            selected_skills.append(normalize_skill(skill))
+    return selected_skills
+
+
+def _persist_picker_selection(user_id: int, state: PickerState | None) -> list[str]:
+    if state is None:
+        # If picker state is missing, keep already persisted skills unchanged.
+        return db.get_skills(user_id)
+    selected_skills = _selected_skills_from_state(state)
+    db.set_skills(user_id, selected_skills)
+    return db.get_skills(user_id)
+
+
 def _set_message_id(user_id: int, message_id: int | None) -> None:
     state = ACTIVE_SKILL_PICKERS.get(user_id)
     if state is None:
@@ -229,15 +247,8 @@ async def handle_skill_done(callback: CallbackQuery) -> None:
     try:
         user_id = callback.from_user.id
         _bind_callback_message(callback)
-        state = _state_or_init(user_id)
-
-        selected_keys = state["selected"]
-        selected_skills: list[str] = []
-        for skill in state["all"]:
-            if skill.lower() in selected_keys:
-                selected_skills.append(normalize_skill(skill))
-
-        db.set_skills(user_id, selected_skills)
+        state = ACTIVE_SKILL_PICKERS.get(user_id)
+        selected_skills = _persist_picker_selection(user_id, state)
         ACTIVE_SKILL_PICKERS.pop(user_id, None)
 
         count = len(selected_skills)

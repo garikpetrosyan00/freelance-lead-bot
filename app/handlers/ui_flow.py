@@ -10,7 +10,7 @@ from app.analytics import log_event
 from app.billing.stripe_checkout import create_checkout_session
 from app.config import get_admin_chat_id
 from app.handlers.plan import render_upgrade_text
-from app.handlers.test_lead import handle_test_lead
+from app.handlers.test_lead import send_test_lead_preview
 from app.ops.usage import get_usage_summary
 from app.ui.screens import back_home_kb, home_kb, home_text
 from app.ui.state import UI_MESSAGE_ID, render_ui_message
@@ -150,10 +150,11 @@ async def handle_ui_home(callback: CallbackQuery) -> None:
 async def handle_ui_test_lead(callback: CallbackQuery) -> None:
     try:
         _seed_ui_anchor(callback)
-        if isinstance(callback.message, Message):
-            await handle_test_lead(callback.message)
-        else:
-            await callback.bot.send_message(callback.from_user.id, "Use /test_lead to run the test.")
+        user_id = callback.from_user.id
+        await send_test_lead_preview(
+            user_id=user_id,
+            answer=lambda text: callback.bot.send_message(chat_id=user_id, text=text),
+        )
     finally:
         await callback.answer()
 

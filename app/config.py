@@ -178,3 +178,32 @@ def get_lemon_checkout_url() -> str:
 
 def get_lemon_webhook_secret() -> str:
     return os.getenv("LEMONSQUEEZY_WEBHOOK_SECRET", "").strip()
+
+
+def get_upwork_rss_poll_seconds() -> int:
+    return _get_env_int("UPWORK_RSS_POLL_SECONDS", 180)
+
+
+def get_upwork_rss_min_matched_skills() -> int:
+    return _get_env_int("UPWORK_RSS_MIN_MATCHED_SKILLS", 1)
+
+
+def get_upwork_rss_free_daily_cap() -> int:
+    return _get_env_int("UPWORK_RSS_FREE_DAILY_CAP", 10)
+
+
+def get_upwork_rss_pro_daily_cap() -> int:
+    # Use -1 for unlimited.
+    return _get_env_int("UPWORK_RSS_PRO_DAILY_CAP", 100)
+
+
+def get_upwork_rss_seen_retention_days() -> int:
+    return _get_env_int("UPWORK_RSS_SEEN_RETENTION_DAYS", 30)
+
+
+def get_upwork_rss_seen_prefetch_days() -> int:
+    retention_days = max(1, get_upwork_rss_seen_retention_days())
+    prefetch_days = _get_env_int("UPWORK_RSS_SEEN_PREFETCH_DAYS", 7)
+    if prefetch_days < 1:
+        return 1
+    return min(prefetch_days, retention_days)

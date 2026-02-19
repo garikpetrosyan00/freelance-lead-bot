@@ -342,6 +342,49 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS upwork_rss_feeds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT,
+                rss_url TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                UNIQUE(user_id, rss_url)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upwork_jobs_seen (
+                user_id INTEGER NOT NULL,
+                job_uid TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, job_uid)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upwork_daily_counters (
+                user_id INTEGER NOT NULL,
+                day_key TEXT NOT NULL,
+                alerts_sent INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, day_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upwork_user_prefs (
+                user_id INTEGER PRIMARY KEY,
+                mute_keywords TEXT NOT NULL DEFAULT '',
+                digest_mode INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
             ON upgrade_requests(status, created_at)
             """
@@ -412,6 +455,12 @@ def init_db() -> None:
             ON error_events(component, ts)
             """
         )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_upwork_rss_feeds_user_enabled
+            ON upwork_rss_feeds(user_id, enabled)
+            """
+        )
         try:
             conn.execute(
                 """
@@ -474,6 +523,25 @@ def get_skills(user_id: int) -> list[str]:
 
     skills_str = row[0] or ""
     return [skill.strip() for skill in skills_str.split(",") if skill.strip()]
+
+
+def get_skills_storage_snapshot(user_id: int) -> dict[str, Any]:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT skills, updated_at FROM user_prefs WHERE user_id = ?",
+            (int(user_id),),
+        ).fetchone()
+    if not row:
+        return {
+            "row_exists": False,
+            "raw_skills": "",
+            "updated_at": None,
+        }
+    return {
+        "row_exists": True,
+        "raw_skills": str(row[0] or ""),
+        "updated_at": str(row[1] or ""),
+    }
 
 
 def set_subscription(user_id: int, is_active: bool) -> None:
@@ -2013,6 +2081,320 @@ def mark_seen_lead(user_id: int, lead_hash: str) -> None:
             (user_id, lead_hash, now),
         )
         conn.commit()
+
+
+def add_upwork_feed(user_id: int, rss_url: str, title: str | None = None) -> bool:
+    now = _utc_now()
+    cleaned_url = str(rss_url or "").strip()
+    cleaned_title = (str(title).strip() or None) if title is not None else None
+    with _connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM upwork_rss_feeds WHERE user_id = ? AND rss_url = ?",
+            (user_id, cleaned_url),
+        ).fetchone()
+        if existing is not None:
+            conn.execute(
+                """
+                UPDATE upwork_rss_feeds
+                SET title = ?, enabled = 1
+                WHERE user_id = ? AND rss_url = ?
+                """,
+                (cleaned_title, user_id, cleaned_url),
+            )
+            conn.commit()
+            return False
+
+        conn.execute(
+            """
+            INSERT INTO upwork_rss_feeds (user_id, title, rss_url, enabled, created_at)
+            VALUES (?, ?, ?, 1, ?)
+            """,
+            (user_id, cleaned_title, cleaned_url, now),
+        )
+        conn.commit()
+        return True
+
+
+def list_upwork_feeds(user_id: int) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, title, rss_url, enabled, created_at
+            FROM upwork_rss_feeds
+            WHERE user_id = ?
+            ORDER BY id ASC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [
+        {
+            "id": int(row[0]),
+            "user_id": int(row[1]),
+            "title": str(row[2]) if row[2] is not None else None,
+            "rss_url": str(row[3]),
+            "enabled": int(row[4]),
+            "created_at": str(row[5]),
+        }
+        for row in rows
+    ]
+
+
+def list_enabled_upwork_feeds() -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, title, rss_url, enabled, created_at
+            FROM upwork_rss_feeds
+            WHERE enabled = 1
+            ORDER BY id ASC
+            """
+        ).fetchall()
+    return [
+        {
+            "id": int(row[0]),
+            "user_id": int(row[1]),
+            "title": str(row[2]) if row[2] is not None else None,
+            "rss_url": str(row[3]),
+            "enabled": int(row[4]),
+            "created_at": str(row[5]),
+        }
+        for row in rows
+    ]
+
+
+def set_upwork_feed_enabled(user_id: int, feed_id: int, enabled: bool) -> bool:
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            UPDATE upwork_rss_feeds
+            SET enabled = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (1 if enabled else 0, int(feed_id), int(user_id)),
+        )
+        conn.commit()
+        return int(result.rowcount or 0) > 0
+
+
+def delete_upwork_feed(user_id: int, feed_id: int) -> bool:
+    with _connect() as conn:
+        result = conn.execute(
+            "DELETE FROM upwork_rss_feeds WHERE id = ? AND user_id = ?",
+            (int(feed_id), int(user_id)),
+        )
+        conn.commit()
+        return int(result.rowcount or 0) > 0
+
+
+def get_upwork_feed(user_id: int, feed_id: int) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, title, rss_url, enabled, created_at
+            FROM upwork_rss_feeds
+            WHERE id = ? AND user_id = ?
+            LIMIT 1
+            """,
+            (int(feed_id), int(user_id)),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": int(row[0]),
+        "user_id": int(row[1]),
+        "title": str(row[2]) if row[2] is not None else None,
+        "rss_url": str(row[3]),
+        "enabled": int(row[4]),
+        "created_at": str(row[5]),
+    }
+
+
+def mark_upwork_job_seen(user_id: int, job_uid: str) -> bool:
+    now = _utc_now()
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            INSERT OR IGNORE INTO upwork_jobs_seen (user_id, job_uid, first_seen_at)
+            VALUES (?, ?, ?)
+            """,
+            (int(user_id), str(job_uid), now),
+        )
+        conn.commit()
+        return int(result.rowcount or 0) > 0
+
+
+def is_upwork_job_seen(user_id: int, job_uid: str) -> bool:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM upwork_jobs_seen
+            WHERE user_id = ? AND job_uid = ?
+            LIMIT 1
+            """,
+            (int(user_id), str(job_uid)),
+        ).fetchone()
+    return row is not None
+
+
+def list_upwork_jobs_seen_since(user_id: int, cutoff_iso: str) -> list[str]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT job_uid
+            FROM upwork_jobs_seen
+            WHERE user_id = ? AND first_seen_at >= ?
+            """,
+            (int(user_id), str(cutoff_iso)),
+        ).fetchall()
+    return [str(row[0]) for row in rows if row and row[0] is not None]
+
+
+def mark_job_seen(user_id: int, job_uid: str) -> bool:
+    return mark_upwork_job_seen(user_id, job_uid)
+
+
+def get_upwork_daily_alerts_sent(user_id: int, day_key: str) -> int:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT alerts_sent
+            FROM upwork_daily_counters
+            WHERE user_id = ? AND day_key = ?
+            """,
+            (int(user_id), str(day_key)),
+        ).fetchone()
+    if not row:
+        return 0
+    return int(row[0])
+
+
+def get_daily_alerts_sent(user_id: int, day_key: str) -> int:
+    return get_upwork_daily_alerts_sent(user_id, day_key)
+
+
+def inc_upwork_daily_alerts_sent(user_id: int, day_key: str, delta: int = 1) -> int:
+    safe_delta = max(0, int(delta))
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_daily_counters (user_id, day_key, alerts_sent)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, day_key) DO UPDATE SET
+                alerts_sent = upwork_daily_counters.alerts_sent + excluded.alerts_sent
+            """,
+            (int(user_id), str(day_key), safe_delta),
+        )
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT alerts_sent
+            FROM upwork_daily_counters
+            WHERE user_id = ? AND day_key = ?
+            """,
+            (int(user_id), str(day_key)),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def inc_daily_alerts_sent(user_id: int, day_key: str, delta: int = 1) -> int:
+    return inc_upwork_daily_alerts_sent(user_id, day_key, delta=delta)
+
+
+def _normalize_upwork_mute_keywords(keywords_list: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for keyword in keywords_list:
+        cleaned = " ".join(str(keyword or "").lower().split())
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        result.append(cleaned)
+    return result
+
+
+def get_upwork_user_prefs(user_id: int) -> dict[str, Any]:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT mute_keywords, digest_mode, updated_at
+            FROM upwork_user_prefs
+            WHERE user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+    if row is None:
+        return {
+            "user_id": int(user_id),
+            "mute_keywords": [],
+            "digest_mode": 0,
+            "updated_at": None,
+        }
+    mute_keywords_raw = str(row[0] or "")
+    mute_keywords = _normalize_upwork_mute_keywords(mute_keywords_raw.split(","))
+    return {
+        "user_id": int(user_id),
+        "mute_keywords": mute_keywords,
+        "digest_mode": 1 if int(row[1] or 0) == 1 else 0,
+        "updated_at": str(row[2] or ""),
+    }
+
+
+def set_upwork_mute_keywords(user_id: int, keywords_list: Iterable[str]) -> list[str]:
+    now = _utc_now()
+    normalized = _normalize_upwork_mute_keywords(keywords_list)
+    keywords_csv = ", ".join(normalized)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_user_prefs (user_id, mute_keywords, digest_mode, updated_at)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                mute_keywords=excluded.mute_keywords,
+                updated_at=excluded.updated_at
+            """,
+            (int(user_id), keywords_csv, now),
+        )
+        conn.commit()
+    return normalized
+
+
+def set_upwork_digest_mode(user_id: int, enabled: bool) -> int:
+    now = _utc_now()
+    digest_mode = 1 if enabled else 0
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_user_prefs (user_id, mute_keywords, digest_mode, updated_at)
+            VALUES (?, '', ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                digest_mode=excluded.digest_mode,
+                updated_at=excluded.updated_at
+            """,
+            (int(user_id), digest_mode, now),
+        )
+        conn.commit()
+    return digest_mode
+
+
+def cleanup_upwork_jobs_seen_before(cutoff_iso: str) -> int:
+    with _connect() as conn:
+        result = conn.execute(
+            "DELETE FROM upwork_jobs_seen WHERE first_seen_at < ?",
+            (str(cutoff_iso),),
+        )
+        conn.commit()
+    return int(result.rowcount or 0)
+
+
+def cleanup_upwork_daily_counters_before(cutoff_day_key: str) -> int:
+    with _connect() as conn:
+        result = conn.execute(
+            "DELETE FROM upwork_daily_counters WHERE day_key < ?",
+            (str(cutoff_day_key),),
+        )
+        conn.commit()
+    return int(result.rowcount or 0)
 
 
 def _legacy_min_level_to_skill_matches(value: str | None) -> int:

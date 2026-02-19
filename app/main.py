@@ -33,11 +33,13 @@ from app.handlers import (
     support_router,
     subscription_router,
     test_lead_router,
+    upwork_alerts_router,
     ui_flow_router,
     ui_settings_router,
     upgrade_request_router,
 )
 from app.ingestion.telegram_listener import run_telegram_listener
+from app.jobs.poller import run_upwork_rss_poller
 from app.monitoring import run_monitor_loop
 from app.middlewares.rate_limit import RateLimitMiddleware
 from app.pipeline import run_fake_ingestion
@@ -49,9 +51,14 @@ BASE_CRITICAL_TABLES = (
     "monitor_state",
     "monitor_alerts",
     "error_events",
+    "upwork_rss_feeds",
+    "upwork_jobs_seen",
+    "upwork_daily_counters",
+    "upwork_user_prefs",
 )
 STRIPE_CRITICAL_TABLES = ("payments", "processed_events")
 PRO_EXPIRY_CHECK_INTERVAL_SECONDS = 5 * 60
+_UPWORK_RSS_TASK: asyncio.Task | None = None
 
 
 def configure_logging() -> None:
@@ -141,6 +148,7 @@ async def main() -> None:
     dp.include_router(analytics_admin_router)
     dp.include_router(monitoring_admin_router)
     dp.include_router(upgrade_request_router)
+    dp.include_router(upwork_alerts_router)
 
     tasks: list[asyncio.Task] = []
 
@@ -200,6 +208,12 @@ async def main() -> None:
     expiry_task.add_done_callback(_log_task_failure)
     tasks.append(expiry_task)
 
+    global _UPWORK_RSS_TASK
+    if _UPWORK_RSS_TASK is None or _UPWORK_RSS_TASK.done():
+        _UPWORK_RSS_TASK = asyncio.create_task(run_upwork_rss_poller(bot))
+        _UPWORK_RSS_TASK.add_done_callback(_log_task_failure)
+    tasks.append(_UPWORK_RSS_TASK)
+
     logger.info("Starting bot polling")
     try:
         await dp.start_polling(bot)
@@ -209,6 +223,7 @@ async def main() -> None:
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
+        _UPWORK_RSS_TASK = None
         db.checkpoint_wal_passive()
         await bot.session.close()
         logger.info("Bot polling stopped")

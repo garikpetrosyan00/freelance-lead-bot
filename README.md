@@ -12,6 +12,7 @@ It runs on aiogram + SQLite and supports a safe local DEMO mode with external in
 - Analytics events + admin funnel command (`/funnel`)
 - Monitoring + diagnostics (`/health`, `/diag`, `/doctor`)
 - Public version command (`/version`)
+- Upwork RSS saved-search alerts with skill matching and per-user dedupe
 
 ## Quickstart (Linux/macOS)
 1. Create venv and install deps:
@@ -69,6 +70,17 @@ Webhook server is started by `python -m app.main` when Stripe config is valid.
 - `/version` app version
 - `/skills` open picker
 - `/test_lead` run local match demo
+- `/upwork_add_rss <rss_url> [title]` add or update a saved-search feed
+- `/upwork_feeds` list your feeds
+- `/upwork_feed_enable <id>` enable a feed
+- `/upwork_feed_disable <id>` disable a feed
+- `/upwork_feed_delete <id>` delete a feed
+- `/upwork_test_rss <id>` fetch and preview first 3 jobs
+- `/upwork_mute <kw1, kw2, ...>` mute unwanted keywords
+- `/upwork_unmute <keyword>` remove one muted keyword
+- `/upwork_mute_clear` clear muted keywords
+- `/upwork_digest on|off` switch per-cycle digest mode
+- `/upwork_prefs` show Upwork prefs and cap
 
 ### Admin
 - `/doctor` redacted integration/env readiness report
@@ -78,3 +90,26 @@ Webhook server is started by `python -m app.main` when Stripe config is valid.
 ## Troubleshooting
 - TG creds placeholders cause ingestion crash unless `DEMO_MODE=1` or Telegram ingestion is disabled.
 - If Stripe is disabled/misconfigured, upgrade UI falls back to manual upgrade instructions.
+
+## Upwork RSS setup
+1. In Upwork Jobs search, build your query and choose RSS for the saved search feed URL.
+2. Add it in Telegram:
+```bash
+/upwork_add_rss https://www.upwork.com/ab/jobs/rss/search?...
+```
+3. Optional label:
+```bash
+/upwork_add_rss https://www.upwork.com/ab/jobs/rss/search?... Python backend
+```
+4. Verify your feeds:
+```bash
+/upwork_feeds
+```
+
+Poller settings (optional `.env`):
+- `UPWORK_RSS_POLL_SECONDS=180`
+- `UPWORK_RSS_MIN_MATCHED_SKILLS=1`
+- `UPWORK_RSS_FREE_DAILY_CAP=10`
+- `UPWORK_RSS_PRO_DAILY_CAP=100` (`-1` means unlimited)
+- `UPWORK_RSS_SEEN_RETENTION_DAYS=30`
+- `UPWORK_RSS_SEEN_PREFETCH_DAYS=7` (clamped to retention days)
