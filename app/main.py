@@ -6,6 +6,7 @@ import asyncio
 import logging
 from contextlib import suppress
 from datetime import datetime, timezone
+from typing import Any
 
 from aiogram import Bot, Dispatcher
 
@@ -41,6 +42,7 @@ from app.handlers import (
 from app.ingestion.telegram_listener import run_telegram_listener
 from app.jobs.poller import run_upwork_rss_poller
 from app.monitoring import run_monitor_loop
+from app.middlewares.incoming_debug import IncomingDebugMiddleware
 from app.middlewares.rate_limit import RateLimitMiddleware
 from app.pipeline import run_fake_ingestion
 from app.webhooks import is_stripe_webhook_enabled, run_stripe_webhook_server
@@ -117,7 +119,7 @@ async def main() -> None:
     demo_mode = demo_mode_enabled()
 
     token = load_config()
-    stripe_webhook_enabled, _ = is_stripe_webhook_enabled()
+    stripe_webhook_enabled, stripe_webhook_reason = is_stripe_webhook_enabled()
     required_tables = list(BASE_CRITICAL_TABLES)
     if stripe_webhook_enabled:
         required_tables.extend(STRIPE_CRITICAL_TABLES)
@@ -130,27 +132,49 @@ async def main() -> None:
 
     bot = Bot(token=token)
     dp = Dispatcher()
+    dp.message.middleware(IncomingDebugMiddleware())
     dp.message.middleware(RateLimitMiddleware())
-    dp.include_router(start_router)
-    dp.include_router(ui_flow_router)
-    dp.include_router(support_router)
-    dp.include_router(ui_settings_router)
-    dp.include_router(skills_router)
-    dp.include_router(skills_picker_router)
-    dp.include_router(test_lead_router)
-    dp.include_router(subscription_router)
-    dp.include_router(plan_router)
-    dp.include_router(settings_router)
-    dp.include_router(my_id_router)
-    dp.include_router(buy_pro_router)
-    dp.include_router(payment_status_router)
-    dp.include_router(payment_admin_router)
-    dp.include_router(analytics_admin_router)
-    dp.include_router(monitoring_admin_router)
-    dp.include_router(upgrade_request_router)
-    dp.include_router(upwork_alerts_router)
+
+    async def _handle_dispatch_error(event: Any) -> bool:
+        exc = getattr(event, "exception", None)
+        db.record_error("bot", exc if isinstance(exc, Exception) else Exception("unknown bot error"))
+        logger.exception("Unhandled aiogram update error", exc_info=exc)
+
+        update = getattr(event, "update", None)
+        message = getattr(update, "message", None)
+        if message is not None:
+            with suppress(Exception):
+                await message.answer("Temporary error. Please try again.")
+        return True
+
+    dp.errors.register(_handle_dispatch_error)
+
+    routers = [
+        ("start", start_router),
+        ("ui_flow", ui_flow_router),
+        ("support", support_router),
+        ("ui_settings", ui_settings_router),
+        ("skills", skills_router),
+        ("skills_picker", skills_picker_router),
+        ("test_lead", test_lead_router),
+        ("subscription", subscription_router),
+        ("plan", plan_router),
+        ("settings", settings_router),
+        ("my_id", my_id_router),
+        ("buy_pro", buy_pro_router),
+        ("payment_status", payment_status_router),
+        ("payment_admin", payment_admin_router),
+        ("analytics_admin", analytics_admin_router),
+        ("monitoring_admin", monitoring_admin_router),
+        ("upgrade_request", upgrade_request_router),
+        ("upwork_alerts", upwork_alerts_router),
+    ]
+    for _, router in routers:
+        dp.include_router(router)
+    logger.info("routers included: %s", ", ".join(name for name, _ in routers))
 
     tasks: list[asyncio.Task] = []
+    logger.info("bot started")
 
     if demo_mode:
         logger.warning("DEMO_MODE enabled: external integrations disabled")
@@ -167,6 +191,10 @@ async def main() -> None:
 
     if not demo_mode:
         webhook_ready: asyncio.Event | None = asyncio.Event() if stripe_webhook_enabled else None
+        if stripe_webhook_enabled:
+            logger.info("webhook setup: enabled")
+        else:
+            logger.info("webhook setup: disabled (%s)", stripe_webhook_reason or "not configured")
         webhook_task = asyncio.create_task(run_stripe_webhook_server(bot, ready=webhook_ready))
         webhook_task.add_done_callback(_log_task_failure)
         tasks.append(webhook_task)
@@ -212,6 +240,7 @@ async def main() -> None:
     if _UPWORK_RSS_TASK is None or _UPWORK_RSS_TASK.done():
         _UPWORK_RSS_TASK = asyncio.create_task(run_upwork_rss_poller(bot))
         _UPWORK_RSS_TASK.add_done_callback(_log_task_failure)
+        logger.info("poller started")
     tasks.append(_UPWORK_RSS_TASK)
 
     logger.info("Starting bot polling")

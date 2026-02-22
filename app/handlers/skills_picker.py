@@ -168,7 +168,7 @@ async def handle_skills_picker(message: Message, bot: Bot) -> None:
     await _show_or_update_picker(bot, user.id, message.chat.id, "")
 
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.startswith("/"))
 async def handle_skills_query(message: Message, bot: Bot) -> None:
     user = message.from_user
     if user is None or message.chat is None or user.id not in ACTIVE_SKILL_PICKERS:

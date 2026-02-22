@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from importlib.util import find_spec
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Router
@@ -182,6 +183,10 @@ def _db_exists() -> str:
     return "yes" if os.path.exists(db.DB_PATH) else "no"
 
 
+def _module_installed(module_name: str) -> str:
+    return "yes" if find_spec(module_name) is not None else "no"
+
+
 def _git_commit_short() -> str | None:
     try:
         out = subprocess.check_output(
@@ -321,6 +326,8 @@ async def handle_doctor(message: Message) -> None:
         "🩺 Doctor",
         f"DEMO_MODE: {'ON' if demo_mode else 'OFF'}",
         f"Telegram ingestion: {'enabled' if telegram_ingestion else 'disabled'}",
+        f"httpx installed: {_module_installed('httpx')}",
+        f"feedparser installed: {_module_installed('feedparser')}",
         f"TG_API_ID present: {tg_api_id_present}",
         f"TG_API_HASH present: {tg_api_hash_present}",
         f"Stripe: {'enabled' if stripe_enabled else 'disabled'}",

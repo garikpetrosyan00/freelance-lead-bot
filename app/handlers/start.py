@@ -45,3 +45,21 @@ async def handle_start(message: Message) -> None:
 @router.message(Command("version"))
 async def handle_version(message: Message) -> None:
     await message.answer(f"{version_text()}\nUse /start to open menu.")
+
+
+@router.message(Command("help"))
+async def handle_help(message: Message) -> None:
+    await message.answer(
+        "Help\n"
+        "- Open menu: /start\n"
+        "- Liveness check: /ping\n"
+        "- Set skills: /skills or /set_skills <skills...>\n"
+        "- Test matching (debug): /test_lead or /test_lead all\n"
+        "- Manage Upwork RSS alerts: /upwork_feeds, /upwork_add_rss\n"
+        "- Plan/settings: /plan, /settings"
+    )
+
+
+@router.message(Command("ping"))
+async def handle_ping(message: Message) -> None:
+    await message.answer("pong")

@@ -283,7 +283,7 @@ async def handle_skill_cancel(callback: CallbackQuery) -> None:
         await callback.answer()
 
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.startswith("/"))
 async def handle_custom_skill_input(message: Message) -> None:
     user = message.from_user
     if user is None or message.chat is None:

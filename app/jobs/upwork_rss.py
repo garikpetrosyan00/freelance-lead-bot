@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import re
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-
-import httpx
 
 try:
     import feedparser  # type: ignore
@@ -69,13 +70,9 @@ def _normalize_published(raw_value: str | None) -> str | None:
     return dt.astimezone(timezone.utc).isoformat()
 
 
-async def _fetch_feed_text(rss_url: str) -> str:
-    headers = {"User-Agent": _DEFAULT_UA, "Accept": "application/rss+xml, application/atom+xml, text/xml"}
-    cached = _HTTP_CACHE_HEADERS.get(rss_url) or {}
-    if cached.get("etag"):
-        headers["If-None-Match"] = cached["etag"]
-    if cached.get("last_modified"):
-        headers["If-Modified-Since"] = cached["last_modified"]
+async def _fetch_feed_text_httpx(rss_url: str, headers: dict[str, str]) -> str:
+    import httpx  # type: ignore
+
     timeout = httpx.Timeout(_DEFAULT_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         response = await client.get(rss_url, headers=headers)
@@ -87,6 +84,39 @@ async def _fetch_feed_text(rss_url: str) -> str:
         if etag or last_modified:
             _HTTP_CACHE_HEADERS[rss_url] = {"etag": etag, "last_modified": last_modified}
         return response.text
+
+
+def _fetch_feed_text_urllib_sync(rss_url: str, headers: dict[str, str]) -> str:
+    request = urllib.request.Request(rss_url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=_DEFAULT_TIMEOUT_SECONDS) as response:
+            status = int(getattr(response, "status", 200) or 200)
+            if status == 304:
+                return ""
+            etag = (response.headers.get("ETag") or "").strip()
+            last_modified = (response.headers.get("Last-Modified") or "").strip()
+            if etag or last_modified:
+                _HTTP_CACHE_HEADERS[rss_url] = {"etag": etag, "last_modified": last_modified}
+            payload = response.read()
+            charset = (response.headers.get_content_charset() or "utf-8").strip() or "utf-8"
+            return payload.decode(charset, errors="replace")
+    except urllib.error.HTTPError as exc:
+        if int(getattr(exc, "code", 0) or 0) == 304:
+            return ""
+        raise
+
+
+async def _fetch_feed_text(rss_url: str) -> str:
+    headers = {"User-Agent": _DEFAULT_UA, "Accept": "application/rss+xml, application/atom+xml, text/xml"}
+    cached = _HTTP_CACHE_HEADERS.get(rss_url) or {}
+    if cached.get("etag"):
+        headers["If-None-Match"] = cached["etag"]
+    if cached.get("last_modified"):
+        headers["If-Modified-Since"] = cached["last_modified"]
+    try:
+        return await _fetch_feed_text_httpx(rss_url, headers)
+    except ImportError:
+        return await asyncio.to_thread(_fetch_feed_text_urllib_sync, rss_url, headers)
 
 
 def _items_from_feedparser(feed_text: str) -> list[JobItem]:

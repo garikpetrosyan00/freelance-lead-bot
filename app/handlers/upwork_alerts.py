@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlparse
 
 from aiogram import Router
@@ -13,6 +14,7 @@ from app.config import get_upwork_rss_free_daily_cap, get_upwork_rss_pro_daily_c
 from app.jobs.upwork_rss import fetch_feed_items
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 def _short_url(url: str, limit: int = 72) -> str:
@@ -58,6 +60,9 @@ def _parse_add_rss_args(text: str) -> tuple[str | None, str | None]:
 
 @router.message(Command("upwork_add_rss"))
 async def handle_upwork_add_rss(message: Message) -> None:
+    if message.from_user is None:
+        await message.answer("Unauthorized")
+        return
     rss_url, title = _parse_add_rss_args(message.text or "")
     if not rss_url:
         await message.answer("Usage: /upwork_add_rss <rss_url> [title] or /upwork_add_rss <rss_url> | <title>")
@@ -67,12 +72,17 @@ async def handle_upwork_add_rss(message: Message) -> None:
         await message.answer("Invalid URL. Use an https Upwork RSS/feed link on upwork.com.")
         return
 
+    logger.info("upwork_add_rss triggered user=%s", message.from_user.id)
     created = db.add_upwork_feed(message.from_user.id, rss_url, title=title)
     await message.answer("Added." if created else "Feed already existed. Re-enabled and updated.")
 
 
 @router.message(Command("upwork_feeds"))
 async def handle_upwork_feeds(message: Message) -> None:
+    if message.from_user is None:
+        await message.answer("Unauthorized")
+        return
+    logger.info("upwork_feeds triggered user=%s", message.from_user.id)
     feeds = db.list_upwork_feeds(message.from_user.id)
     if not feeds:
         await message.answer("No feeds yet. Add one with /upwork_add_rss <rss_url> [title]")

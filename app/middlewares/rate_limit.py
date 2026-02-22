@@ -50,6 +50,7 @@ ADMIN_COMMANDS = {
 }
 
 HEAVY_COMMANDS = {"diag", "retention_30d", "sources_7d"}
+NO_THROTTLE_COMMANDS = {"ping"}
 
 
 class RateLimiter:
@@ -131,6 +132,8 @@ class RateLimitMiddleware(BaseMiddleware):
     ) -> Any:
         command = self._extract_command(event)
         if command is None:
+            return await handler(event, data)
+        if command in NO_THROTTLE_COMMANDS:
             return await handler(event, data)
 
         user = event.from_user

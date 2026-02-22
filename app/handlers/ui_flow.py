@@ -58,7 +58,7 @@ def _help_text() -> str:
         "- Set your skills: /skills or /set_skills <skills...>\n"
         "- Check your plan: /plan\n"
         "- Manage settings: /settings\n"
-        "- Test matching: /test_lead\n"
+        "- Test matching (debug): /test_lead\n"
         "- Subscribe/unsubscribe: /subscribe, /unsubscribe"
     )
 
@@ -153,7 +153,7 @@ async def handle_ui_test_lead(callback: CallbackQuery) -> None:
         user_id = callback.from_user.id
         await send_test_lead_preview(
             user_id=user_id,
-            answer=lambda text: callback.bot.send_message(chat_id=user_id, text=text),
+            answer=lambda text, **kwargs: callback.bot.send_message(chat_id=user_id, text=text, **kwargs),
         )
     finally:
         await callback.answer()

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.types import InlineKeyboardMarkup
 
 try:
     from aiogram.exceptions import TelegramRetryAfter
@@ -27,6 +28,7 @@ from app.config import (
     get_upwork_rss_seen_prefetch_days,
     get_upwork_rss_seen_retention_days,
 )
+from app.jobs.formatting import format_lead_message
 from app.jobs.matching import match_skills, normalize
 from app.jobs.upwork_rss import JobItem, fetch_feed_items
 
@@ -57,17 +59,13 @@ def _daily_cap_for_plan(plan: str) -> int | None:
     return cap
 
 
-def _message_text(item: JobItem, score: int, matched: list[str]) -> str:
-    escaped_title = html.escape(item.title or "Untitled")
-    snippet = html.escape(item.summary or "No summary")
-    matched_text = html.escape(", ".join(matched[:10])) if matched else "none"
-    link = html.escape(item.link or "")
-    return (
-        f"<b>{escaped_title}</b>\n"
-        f"{snippet}\n"
-        f"<a href=\"{link}\">Open on Upwork</a>\n"
-        f"Matched: {matched_text}\n"
-        f"Score: {score}%"
+def _item_alert_message(item: JobItem, matched: list[str]) -> tuple[str, InlineKeyboardMarkup | None]:
+    return format_lead_message(
+        item.title or "Untitled",
+        item.summary or "",
+        item.link or None,
+        matched,
+        "upwork_rss",
     )
 
 
@@ -122,12 +120,20 @@ async def run_upwork_rss_poller(bot: Bot) -> None:
 
     logger.info("Upwork RSS poller started (interval=%ss)", interval_seconds)
 
-    async def _send_alert(user_id: int, feed_id: int, text: str) -> bool:
+    async def _send_alert(
+        user_id: int,
+        feed_id: int,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> bool:
         try:
             await bot.send_message(
                 chat_id=user_id,
                 text=text,
-                parse_mode="HTML",
+                parse_mode=parse_mode,
+                reply_markup=reply_markup,
                 disable_web_page_preview=True,
             )
             return True
@@ -155,7 +161,8 @@ async def run_upwork_rss_poller(bot: Bot) -> None:
                     await bot.send_message(
                         chat_id=user_id,
                         text=text,
-                        parse_mode="HTML",
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
                         disable_web_page_preview=True,
                     )
                     return True
@@ -311,7 +318,8 @@ async def run_upwork_rss_poller(bot: Bot) -> None:
                     cycle_seen.add(cycle_key)
                     if not consumed:
                         continue
-                    sent = await _send_alert(user_id, feed_id, _message_text(item, score, matched))
+                    text, reply_markup = _item_alert_message(item, matched)
+                    sent = await _send_alert(user_id, feed_id, text, reply_markup=reply_markup)
                     if sent:
                         db.inc_upwork_daily_alerts_sent(user_id, day_key, delta=1)
                         cycle_alert_counts[user_id] = reserved + 1
@@ -361,7 +369,7 @@ async def run_upwork_rss_poller(bot: Bot) -> None:
                 for user_id, rows in digest_batches.items():
                     if not rows:
                         continue
-                    sent = await _send_alert(user_id, 0, _digest_text(rows))
+                    sent = await _send_alert(user_id, 0, _digest_text(rows), parse_mode="HTML")
                     if sent:
                         db.inc_upwork_daily_alerts_sent(user_id, _day_key_now(), delta=len(rows))
 

@@ -23,15 +23,10 @@ from app.db import (
     utc_day,
 )
 from app.gating import can_send_notification, effective_cap
+from app.jobs.formatting import format_lead_message
 from app.leads import Lead
 from app.monetization.teaser import maybe_send_teaser
 from app.ops.logging_utils import log_kv, mask_user_id, safe_exc
-
-
-def _format_line(label: str, value: str | None) -> str | None:
-    if value is None or value == "":
-        return None
-    return f"{label}: {value}"
 
 
 def _lead_hash(lead: Lead) -> str:
@@ -138,33 +133,16 @@ async def send_lead(bot: Bot, user_id: int, lead: Lead, match: dict) -> bool:
             )
         return False
 
-    matched = match.get("matched", [])
-    matched_text = ", ".join(matched) if matched else "None"
-
-    lines = [
-        "🔥 New lead found!",
-        f"Title: {lead.title}",
-        _format_line("Budget", lead.budget),
-        f"⭐ Score: {match.get('score', 0)}%",
-        f"Match: {match.get('level', 'NONE')} ({match.get('score', 0)}%)",
-        f"Matched skills: {matched_text}",
-        "🧠 Why:",
-    ]
-
-    details = match.get("details") or []
-    for detail in details[:3]:
-        lines.append(f"- {detail}")
-
-    lines.extend(
-        [
-            f"Source: {lead.source}",
-            _format_line("Link", lead.url),
-        ]
+    matched = list(match.get("matched") or [])
+    text, reply_markup = format_lead_message(
+        lead.title,
+        lead.description,
+        lead.url,
+        matched,
+        lead.source,
     )
-
-    text = "\n".join([line for line in lines if line])
     try:
-        await bot.send_message(chat_id=user_id, text=text)
+        await bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
     except Exception as exc:
         record_error(
             "notify",
