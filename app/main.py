@@ -17,6 +17,7 @@ from app.config import (
     demo_mode_enabled,
     enable_fake_ingestion,
     enable_telegram_ingestion,
+    get_upwork_poll_mode,
     load_config,
 )
 from app.handlers import (
@@ -35,6 +36,10 @@ from app.handlers import (
     subscription_router,
     test_lead_router,
     upwork_alerts_router,
+    upwork_api_router,
+    upwork_oauth_router,
+    upwork_profiles_router,
+    upwork_status_router,
     ui_flow_router,
     ui_settings_router,
     upgrade_request_router,
@@ -44,6 +49,7 @@ from app.jobs.poller import run_upwork_rss_poller
 from app.monitoring import run_monitor_loop
 from app.middlewares.incoming_debug import IncomingDebugMiddleware
 from app.middlewares.rate_limit import RateLimitMiddleware
+from app.pollers.upwork_api_poller import run_upwork_api_poller
 from app.pipeline import run_fake_ingestion
 from app.webhooks import is_stripe_webhook_enabled, run_stripe_webhook_server
 
@@ -60,7 +66,8 @@ BASE_CRITICAL_TABLES = (
 )
 STRIPE_CRITICAL_TABLES = ("payments", "processed_events")
 PRO_EXPIRY_CHECK_INTERVAL_SECONDS = 5 * 60
-_UPWORK_RSS_TASK: asyncio.Task | None = None
+_UPWORK_POLL_TASK: asyncio.Task | None = None
+OAUTH_STATE_CLEANUP_INTERVAL_SECONDS = 3600
 
 
 def configure_logging() -> None:
@@ -110,6 +117,22 @@ async def run_pro_expiry_loop(bot: Bot, interval_seconds: int = PRO_EXPIRY_CHECK
         except Exception as exc:
             record_error("billing", exc, context={"action": "expire_overdue_pro_users"})
             logger.warning("PRO expiry loop iteration failed", exc_info=True)
+        await asyncio.sleep(safe_interval)
+
+
+async def run_oauth_state_cleanup_loop(interval_seconds: int = OAUTH_STATE_CLEANUP_INTERVAL_SECONDS) -> None:
+    safe_interval = max(300, int(interval_seconds))
+    logger = logging.getLogger(__name__)
+    logger.info("OAuth state cleanup loop started (interval=%ss)", safe_interval)
+    while True:
+        try:
+            removed = db.upwork_oauth_state_cleanup(datetime.now(timezone.utc).isoformat())
+            logger.info("OAuth state cleanup done removed=%s", removed)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            db.record_error("upwork_oauth", exc, context={"action": "state_cleanup"})
+            logger.warning("OAuth state cleanup failed", exc_info=True)
         await asyncio.sleep(safe_interval)
 
 
@@ -168,6 +191,10 @@ async def main() -> None:
         ("monitoring_admin", monitoring_admin_router),
         ("upgrade_request", upgrade_request_router),
         ("upwork_alerts", upwork_alerts_router),
+        ("upwork_oauth", upwork_oauth_router),
+        ("upwork_profiles", upwork_profiles_router),
+        ("upwork_status", upwork_status_router),
+        ("upwork_api", upwork_api_router),
     ]
     for _, router in routers:
         dp.include_router(router)
@@ -236,12 +263,21 @@ async def main() -> None:
     expiry_task.add_done_callback(_log_task_failure)
     tasks.append(expiry_task)
 
-    global _UPWORK_RSS_TASK
-    if _UPWORK_RSS_TASK is None or _UPWORK_RSS_TASK.done():
-        _UPWORK_RSS_TASK = asyncio.create_task(run_upwork_rss_poller(bot))
-        _UPWORK_RSS_TASK.add_done_callback(_log_task_failure)
-        logger.info("poller started")
-    tasks.append(_UPWORK_RSS_TASK)
+    oauth_cleanup_task = asyncio.create_task(run_oauth_state_cleanup_loop())
+    oauth_cleanup_task.add_done_callback(_log_task_failure)
+    tasks.append(oauth_cleanup_task)
+
+    poll_mode = get_upwork_poll_mode()
+    global _UPWORK_POLL_TASK
+    if _UPWORK_POLL_TASK is None or _UPWORK_POLL_TASK.done():
+        if poll_mode == "rss":
+            _UPWORK_POLL_TASK = asyncio.create_task(run_upwork_rss_poller(bot))
+            logger.info("poller started: mode=rss")
+        else:
+            _UPWORK_POLL_TASK = asyncio.create_task(run_upwork_api_poller(bot))
+            logger.info("poller started: mode=api")
+        _UPWORK_POLL_TASK.add_done_callback(_log_task_failure)
+    tasks.append(_UPWORK_POLL_TASK)
 
     logger.info("Starting bot polling")
     try:
@@ -252,7 +288,7 @@ async def main() -> None:
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
-        _UPWORK_RSS_TASK = None
+        _UPWORK_POLL_TASK = None
         db.checkpoint_wal_passive()
         await bot.session.close()
         logger.info("Bot polling stopped")

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, List
 
 from app.ops.logging_utils import safe_exc, sanitize_meta
+from app.ops.crypto import decrypt_str
 
 DB_PATH = os.path.join("data", "app.db")
 DB_URI = False
@@ -385,6 +386,50 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS upwork_oauth_accounts (
+                user_id INTEGER PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_connected INTEGER NOT NULL DEFAULT 0,
+                access_token_enc TEXT,
+                refresh_token_enc TEXT,
+                access_token_expires_at TEXT,
+                scopes TEXT,
+                tenant_id TEXT,
+                last_token_refresh_at TEXT,
+                revoked_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upwork_oauth_states (
+                state TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                redirect_context TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upwork_search_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                query TEXT NOT NULL,
+                filters_json TEXT,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_cursor_json TEXT,
+                UNIQUE(user_id, name)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status_created_at
             ON upgrade_requests(status, created_at)
             """
@@ -459,6 +504,30 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_upwork_rss_feeds_user_enabled
             ON upwork_rss_feeds(user_id, enabled)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_upwork_oauth_accounts_connected
+            ON upwork_oauth_accounts(is_connected)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_upwork_oauth_states_user_id
+            ON upwork_oauth_states(user_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_upwork_oauth_states_expires_at
+            ON upwork_oauth_states(expires_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_upwork_search_profiles_user_enabled
+            ON upwork_search_profiles(user_id, is_enabled)
             """
         )
         try:
@@ -2375,6 +2444,401 @@ def set_upwork_digest_mode(user_id: int, enabled: bool) -> int:
         )
         conn.commit()
     return digest_mode
+
+
+def _upwork_oauth_account_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "user_id": int(row[0]),
+        "created_at": str(row[1]),
+        "updated_at": str(row[2]),
+        "is_connected": int(row[3]),
+        "access_token_enc": str(row[4]) if row[4] is not None else None,
+        "refresh_token_enc": str(row[5]) if row[5] is not None else None,
+        "access_token_expires_at": str(row[6]) if row[6] is not None else None,
+        "scopes": str(row[7]) if row[7] is not None else None,
+        "tenant_id": str(row[8]) if row[8] is not None else None,
+        "last_token_refresh_at": str(row[9]) if row[9] is not None else None,
+        "revoked_at": str(row[10]) if row[10] is not None else None,
+    }
+
+
+def upwork_oauth_get_account(user_id: int) -> dict[str, Any] | None:
+    """Return OAuth account row for a Telegram user."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                user_id,
+                created_at,
+                updated_at,
+                is_connected,
+                access_token_enc,
+                refresh_token_enc,
+                access_token_expires_at,
+                scopes,
+                tenant_id,
+                last_token_refresh_at,
+                revoked_at
+            FROM upwork_oauth_accounts
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    return _upwork_oauth_account_row_to_dict(row)
+
+
+def upwork_oauth_upsert_account_connected(
+    user_id: int,
+    access_token_enc: str,
+    refresh_token_enc: str,
+    expires_at_iso: str,
+    scopes: str | None,
+    tenant_id: str | None,
+) -> None:
+    """Insert or update a connected OAuth account with latest tokens."""
+    _require_fernet_encrypted_token(access_token_enc, "access_token_enc")
+    _require_fernet_encrypted_token(refresh_token_enc, "refresh_token_enc")
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_oauth_accounts (
+                user_id,
+                created_at,
+                updated_at,
+                is_connected,
+                access_token_enc,
+                refresh_token_enc,
+                access_token_expires_at,
+                scopes,
+                tenant_id,
+                last_token_refresh_at,
+                revoked_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, NULL)
+            ON CONFLICT(user_id) DO UPDATE SET
+                updated_at=excluded.updated_at,
+                is_connected=1,
+                access_token_enc=excluded.access_token_enc,
+                refresh_token_enc=excluded.refresh_token_enc,
+                access_token_expires_at=excluded.access_token_expires_at,
+                scopes=excluded.scopes,
+                tenant_id=excluded.tenant_id,
+                last_token_refresh_at=excluded.last_token_refresh_at,
+                revoked_at=NULL
+            """,
+            (
+                int(user_id),
+                now,
+                now,
+                str(access_token_enc),
+                str(refresh_token_enc),
+                str(expires_at_iso),
+                str(scopes) if scopes is not None else None,
+                str(tenant_id) if tenant_id is not None else None,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def _require_fernet_encrypted_token(value: str, field_name: str) -> None:
+    try:
+        decrypt_str(value)
+    except Exception as exc:
+        raise ValueError(f"{field_name} must be a Fernet-encrypted token string.") from exc
+
+
+def upwork_oauth_mark_disconnected(user_id: int, revoked_at_iso: str) -> None:
+    """Disconnect OAuth account and clear token-bearing fields."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_oauth_accounts (
+                user_id,
+                created_at,
+                updated_at,
+                is_connected,
+                access_token_enc,
+                refresh_token_enc,
+                access_token_expires_at,
+                scopes,
+                tenant_id,
+                last_token_refresh_at,
+                revoked_at
+            )
+            VALUES (?, ?, ?, 0, NULL, NULL, NULL, NULL, NULL, NULL, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                updated_at=excluded.updated_at,
+                is_connected=0,
+                access_token_enc=NULL,
+                refresh_token_enc=NULL,
+                access_token_expires_at=NULL,
+                scopes=NULL,
+                last_token_refresh_at=NULL,
+                revoked_at=excluded.revoked_at
+            """,
+            (
+                int(user_id),
+                str(revoked_at_iso),
+                str(revoked_at_iso),
+                str(revoked_at_iso),
+            ),
+        )
+        conn.commit()
+
+
+def upwork_oauth_set_tenant_id(user_id: int, tenant_id: str | None) -> None:
+    """Update OAuth tenant id for a user account row."""
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_oauth_accounts (
+                user_id,
+                created_at,
+                updated_at,
+                is_connected,
+                tenant_id
+            )
+            VALUES (?, ?, ?, 0, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                updated_at=excluded.updated_at,
+                tenant_id=excluded.tenant_id
+            """,
+            (int(user_id), now, now, str(tenant_id) if tenant_id is not None else None),
+        )
+        conn.commit()
+
+
+def _upwork_oauth_state_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "state": str(row[0]),
+        "user_id": int(row[1]),
+        "created_at": str(row[2]),
+        "expires_at": str(row[3]),
+        "redirect_context": str(row[4]) if row[4] is not None else None,
+    }
+
+
+def upwork_oauth_state_create(
+    state: str,
+    user_id: int,
+    created_at_iso: str,
+    expires_at_iso: str,
+    redirect_context: str | None,
+) -> None:
+    """Create a one-time OAuth state token row."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_oauth_states (state, user_id, created_at, expires_at, redirect_context)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                str(state),
+                int(user_id),
+                str(created_at_iso),
+                str(expires_at_iso),
+                str(redirect_context) if redirect_context is not None else None,
+            ),
+        )
+        conn.commit()
+
+
+def upwork_oauth_state_pop_valid(state: str, now_iso: str) -> dict[str, Any] | None:
+    """Atomically fetch and consume a valid, non-expired OAuth state token."""
+    with _connect() as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT state, user_id, created_at, expires_at, redirect_context
+                FROM upwork_oauth_states
+                WHERE state = ? AND expires_at > ?
+                LIMIT 1
+                """,
+                (str(state), str(now_iso)),
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return None
+            conn.execute("DELETE FROM upwork_oauth_states WHERE state = ?", (str(state),))
+            conn.commit()
+            return _upwork_oauth_state_row_to_dict(row)
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def upwork_oauth_state_peek_valid(state: str, now_iso: str) -> dict[str, Any] | None:
+    """Fetch a valid, non-expired OAuth state token without consuming it."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT state, user_id, created_at, expires_at, redirect_context
+            FROM upwork_oauth_states
+            WHERE state = ? AND expires_at > ?
+            LIMIT 1
+            """,
+            (str(state), str(now_iso)),
+        ).fetchone()
+    if row is None:
+        return None
+    return _upwork_oauth_state_row_to_dict(row)
+
+
+def upwork_oauth_state_cleanup(now_iso: str) -> int:
+    """Delete expired OAuth states and return deleted row count."""
+    with _connect() as conn:
+        result = conn.execute(
+            "DELETE FROM upwork_oauth_states WHERE expires_at <= ?",
+            (str(now_iso),),
+        )
+        conn.commit()
+    return int(result.rowcount or 0)
+
+
+def _upwork_profile_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
+    return {
+        "id": int(row[0]),
+        "user_id": int(row[1]),
+        "name": str(row[2]),
+        "query": str(row[3]),
+        "filters_json": str(row[4]) if row[4] is not None else None,
+        "is_enabled": int(row[5]),
+        "created_at": str(row[6]),
+        "updated_at": str(row[7]),
+        "last_cursor_json": str(row[8]) if row[8] is not None else None,
+    }
+
+
+def upwork_profiles_add(user_id: int, name: str, query: str, filters_json: str | None) -> None:
+    """Create a saved Upwork search profile."""
+    now = _utc_now()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO upwork_search_profiles (
+                user_id,
+                name,
+                query,
+                filters_json,
+                is_enabled,
+                created_at,
+                updated_at,
+                last_cursor_json
+            )
+            VALUES (?, ?, ?, ?, 1, ?, ?, NULL)
+            """,
+            (
+                int(user_id),
+                str(name),
+                str(query),
+                str(filters_json) if filters_json is not None else None,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+
+
+def upwork_profiles_list(user_id: int) -> list[dict[str, Any]]:
+    """List saved search profiles for a user."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                name,
+                query,
+                filters_json,
+                is_enabled,
+                created_at,
+                updated_at,
+                last_cursor_json
+            FROM upwork_search_profiles
+            WHERE user_id = ?
+            ORDER BY id ASC
+            """,
+            (int(user_id),),
+        ).fetchall()
+    return [_upwork_profile_row_to_dict(row) for row in rows]
+
+
+def upwork_profiles_list_enabled_all() -> list[dict[str, Any]]:
+    """List all enabled saved search profiles across all users."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                name,
+                query,
+                filters_json,
+                is_enabled,
+                created_at,
+                updated_at,
+                last_cursor_json
+            FROM upwork_search_profiles
+            WHERE is_enabled = 1
+            ORDER BY user_id ASC, id ASC
+            """
+        ).fetchall()
+    return [_upwork_profile_row_to_dict(row) for row in rows]
+
+
+def upwork_profiles_delete(user_id: int, name: str) -> bool:
+    """Delete a saved search profile by unique user/name."""
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            DELETE FROM upwork_search_profiles
+            WHERE user_id = ? AND name = ?
+            """,
+            (int(user_id), str(name)),
+        )
+        conn.commit()
+    return int(result.rowcount or 0) > 0
+
+
+def upwork_profiles_set_enabled(user_id: int, name: str, enabled: bool) -> bool:
+    """Enable or disable a saved search profile."""
+    now = _utc_now()
+    with _connect() as conn:
+        result = conn.execute(
+            """
+            UPDATE upwork_search_profiles
+            SET is_enabled = ?, updated_at = ?
+            WHERE user_id = ? AND name = ?
+            """,
+            (1 if enabled else 0, now, int(user_id), str(name)),
+        )
+        conn.commit()
+    return int(result.rowcount or 0) > 0
+
+
+def upwork_profiles_update_cursor(profile_id: int, last_cursor_json: str | None, updated_at_iso: str) -> None:
+    """Persist the last pagination cursor for a profile."""
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE upwork_search_profiles
+            SET last_cursor_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                str(last_cursor_json) if last_cursor_json is not None else None,
+                str(updated_at_iso),
+                int(profile_id),
+            ),
+        )
+        conn.commit()
 
 
 def cleanup_upwork_jobs_seen_before(cutoff_iso: str) -> int:

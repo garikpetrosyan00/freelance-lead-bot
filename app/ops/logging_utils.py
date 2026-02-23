@@ -61,6 +61,8 @@ def _sanitize_value(value: Any) -> Any:
         text = redact_secrets(value)
         text = _EMAIL_RE.sub("[redacted_email]", text)
         lowered = text.lower()
+        if "[redacted_token]" in lowered:
+            return text if len(text) <= 200 else text[:200] + "..."
         if any(key in lowered for key in ("bearer ", "sk_", "whsec_", "xoxb-")):
             return "[redacted]"
         if len(text) > 200:

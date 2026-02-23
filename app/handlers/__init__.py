@@ -18,6 +18,10 @@ from .ui_flow import router as ui_flow_router
 from .ui_settings import router as ui_settings_router
 from .support import router as support_router
 from .upwork_alerts import router as upwork_alerts_router
+from .upwork_api import router as upwork_api_router
+from .upwork_oauth import router as upwork_oauth_router
+from .upwork_profiles import router as upwork_profiles_router
+from .upwork_status import router as upwork_status_router
 
 __all__ = [
     "start_router",
@@ -38,4 +42,8 @@ __all__ = [
     "ui_settings_router",
     "support_router",
     "upwork_alerts_router",
+    "upwork_api_router",
+    "upwork_oauth_router",
+    "upwork_profiles_router",
+    "upwork_status_router",
 ]

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import os
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency in minimal environments
+    def load_dotenv() -> bool:
+        return False
 
 
 def load_config() -> str:
@@ -207,3 +211,46 @@ def get_upwork_rss_seen_prefetch_days() -> int:
     if prefetch_days < 1:
         return 1
     return min(prefetch_days, retention_days)
+
+
+def get_upwork_client_id() -> str:
+    value = os.getenv("UPWORK_CLIENT_ID", "").strip()
+    if not value:
+        raise RuntimeError("UPWORK_CLIENT_ID is not set in environment")
+    return value
+
+
+def get_upwork_client_secret() -> str:
+    value = os.getenv("UPWORK_CLIENT_SECRET", "").strip()
+    if not value:
+        raise RuntimeError("UPWORK_CLIENT_SECRET is not set in environment")
+    return value
+
+
+def get_upwork_redirect_url() -> str:
+    value = os.getenv("UPWORK_REDIRECT_URL", "").strip()
+    if not value:
+        raise RuntimeError("UPWORK_REDIRECT_URL is not set in environment")
+    return value
+
+
+def get_upwork_oauth_authorize_url() -> str:
+    value = os.getenv("UPWORK_OAUTH_AUTHORIZE_URL", "").strip()
+    return value or "https://www.upwork.com/ab/account-security/oauth2/authorize"
+
+
+def get_upwork_oauth_token_url() -> str:
+    value = os.getenv("UPWORK_OAUTH_TOKEN_URL", "").strip()
+    return value or "https://www.upwork.com/api/v3/oauth2/token"
+
+
+def get_upwork_graphql_url() -> str:
+    value = os.getenv("UPWORK_GRAPHQL_URL", "").strip()
+    return value or "https://api.upwork.com/graphql"
+
+
+def get_upwork_poll_mode() -> str:
+    value = os.getenv("UPWORK_POLL_MODE", "api").strip().lower()
+    if value not in {"api", "rss"}:
+        raise RuntimeError("UPWORK_POLL_MODE must be 'api' or 'rss'")
+    return value

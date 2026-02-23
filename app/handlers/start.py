@@ -56,6 +56,10 @@ async def handle_help(message: Message) -> None:
         "- Set skills: /skills or /set_skills <skills...>\n"
         "- Test matching (debug): /test_lead or /test_lead all\n"
         "- Manage Upwork RSS alerts: /upwork_feeds, /upwork_add_rss\n"
+        "- Connect Upwork OAuth: /upwork_connect, /upwork_disconnect\n"
+        "- Manage Upwork API profiles: /upwork_profiles list|add|del|enable|disable\n"
+        "- Upwork status: /upwork_status\n"
+        "- Test Upwork official API: /upwork_test_api [query]\n"
         "- Plan/settings: /plan, /settings"
     )
 
