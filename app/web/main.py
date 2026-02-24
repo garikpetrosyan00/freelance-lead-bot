@@ -12,6 +12,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from app import db
+from app.config import get_upwork_fetch_mode
 from app.integrations.upwork.client import build_authorize_url, exchange_code_for_token
 from app.ops.crypto import decrypt_str, encrypt_str
 from app.ops.logging_utils import safe_exc
@@ -78,6 +79,12 @@ async def healthz() -> PlainTextResponse:
 
 @app.get("/upwork/connect")
 async def upwork_connect(state: str = Query(default="")):
+    if get_upwork_fetch_mode() == "public":
+        return _html_page(
+            "Upwork Connect",
+            "Official Upwork OAuth app credentials are not configured. Running in public mode.",
+            status_code=200,
+        )
     now_iso = _now_iso()
     state_row = db.upwork_oauth_state_peek_valid(state=state, now_iso=now_iso)
     if state_row is None:
@@ -86,7 +93,15 @@ async def upwork_connect(state: str = Query(default="")):
             "Invalid or expired state. Go back to the bot and run /upwork_connect again.",
             status_code=400,
         )
-    return RedirectResponse(url=build_authorize_url(state), status_code=302)
+    try:
+        return RedirectResponse(url=build_authorize_url(state), status_code=302)
+    except Exception as exc:
+        db.record_error("upwork_oauth", exc, context={"action": "connect_build_authorize_url"})
+        return _html_page(
+            "Upwork Connect",
+            "OAuth credentials are not configured. Set Upwork client settings or use public fetch mode.",
+            status_code=500,
+        )
 
 
 @app.get("/upwork/callback")

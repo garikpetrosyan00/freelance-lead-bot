@@ -12,6 +12,7 @@ from .client import (
     refresh_access_token,
     search_public_jobs,
 )
+from .public_search import search_public_jobs_public
 
 __all__ = [
     "TokenBundle",
@@ -24,4 +25,5 @@ __all__ = [
     "get_valid_access_token_for_user",
     "graphql_request",
     "search_public_jobs",
+    "search_public_jobs_public",
 ]

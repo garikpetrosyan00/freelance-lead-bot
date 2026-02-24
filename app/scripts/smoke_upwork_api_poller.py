@@ -24,24 +24,12 @@ async def _run_cycle_smoke() -> None:
     old_cap = os.getenv("UPWORK_RSS_FREE_DAILY_CAP")
     os.environ["UPWORK_RSS_FREE_DAILY_CAP"] = "1"
     try:
-        user_id = 9001
-        db.set_skills(user_id, ["react", "python"])
-        db.upwork_profiles_add(user_id, "smoke", "react developer", None)
-        db.set_upwork_mute_keywords(user_id, [])
+        public_user_id = 9001
+        db.set_skills(public_user_id, ["react", "python"])
+        db.upwork_profiles_add(public_user_id, "public-smoke", "react developer", None)
+        db.set_upwork_mute_keywords(public_user_id, [])
 
-        # Keep smoke independent from OAuth crypto/env by seeding a connected row directly.
-        with db._connect() as conn:  # type: ignore[attr-defined]
-            conn.execute(
-                """
-                INSERT INTO upwork_oauth_accounts (
-                    user_id, created_at, updated_at, is_connected
-                ) VALUES (?, ?, ?, 1)
-                """,
-                (user_id, "2026-02-23T10:00:00+00:00", "2026-02-23T10:00:00+00:00"),
-            )
-            conn.commit()
-
-        async def _fake_search(_user_id: int, _query: str, _limit: int):
+        async def _fake_public_search(_query: str, _limit: int):
             return [
                 {
                     "id": "job-1",
@@ -77,14 +65,16 @@ async def _run_cycle_smoke() -> None:
             send_fn=bot.send,
             state=state,
             semaphore=semaphore,
-            search_fn=_fake_search,
+            search_fn=_fake_public_search,
+            fetch_mode="public",
         )
         assert stats_1["jobs_fetched"] >= 2
         assert stats_1["new_jobs"] == 1
         assert stats_1["sent"] == 1, "daily cap=1 should allow only one send"
         assert stats_1["filtered_out_by_watermark"] == 0
+        assert stats_1["skipped_not_connected"] == 0, "public mode must not require OAuth account"
         assert len(bot.messages) == 1
-        rows_after_1 = db.upwork_profiles_list(user_id)
+        rows_after_1 = db.upwork_profiles_list(public_user_id)
         assert rows_after_1, "expected profile row after first cycle"
         assert rows_after_1[0]["last_cursor_json"], "expected cursor to be updated after first cycle"
 
@@ -92,7 +82,8 @@ async def _run_cycle_smoke() -> None:
             send_fn=bot.send,
             state=state,
             semaphore=semaphore,
-            search_fn=_fake_search,
+            search_fn=_fake_public_search,
+            fetch_mode="public",
         )
         assert stats_2["filtered_out_by_watermark"] >= 1
         assert stats_2["new_jobs"] == 0, "dedupe should prevent reprocessing seen jobs"
@@ -100,7 +91,7 @@ async def _run_cycle_smoke() -> None:
         assert len(bot.messages) == 1
 
         # Auth-error path: disconnect + notify-once cooldown behavior.
-        db.upwork_profiles_set_enabled(user_id, "smoke", enabled=False)
+        db.upwork_profiles_set_enabled(public_user_id, "public-smoke", enabled=False)
         auth_user_id = 9002
         db.set_skills(auth_user_id, ["react"])
         db.upwork_profiles_add(auth_user_id, "auth-smoke", "react", None)
@@ -128,6 +119,7 @@ async def _run_cycle_smoke() -> None:
             state=auth_state,
             semaphore=semaphore,
             search_fn=_fake_auth_error,
+            fetch_mode="oauth",
         )
         assert auth_stats_1["auth_errors"] == 1
         account = db.upwork_oauth_get_account(auth_user_id)
@@ -149,6 +141,7 @@ async def _run_cycle_smoke() -> None:
             state=auth_state,
             semaphore=semaphore,
             search_fn=_fake_auth_error,
+            fetch_mode="oauth",
         )
         assert auth_stats_2["auth_errors"] == 1
         reconnect_msgs = [m for m in auth_bot.messages if "/upwork_connect" in str(m.get("text") or "")]

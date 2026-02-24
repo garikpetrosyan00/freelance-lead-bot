@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -10,7 +11,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app import db
-from app.config import get_public_base_url
+from app.config import get_public_base_url, get_upwork_fetch_mode
 
 router = Router()
 _STATE_TTL_MINUTES = 10
@@ -24,6 +25,12 @@ def _utc_now() -> datetime:
 async def handle_upwork_connect(message: Message) -> None:
     if message.from_user is None:
         await message.answer("Unauthorized")
+        return
+    if get_upwork_fetch_mode() == "public":
+        await message.answer("Official Upwork OAuth app credentials are not configured. Running in public mode.")
+        return
+    if not os.getenv("UPWORK_CLIENT_ID", "").strip():
+        await message.answer("Upwork OAuth is enabled but UPWORK_CLIENT_ID is missing.")
         return
     user_id = message.from_user.id
     account = db.upwork_oauth_get_account(user_id)

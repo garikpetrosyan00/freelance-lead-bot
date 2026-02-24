@@ -39,6 +39,7 @@ from app.handlers import (
     upwork_api_router,
     upwork_oauth_router,
     upwork_profiles_router,
+    upwork_public_test_router,
     upwork_status_router,
     ui_flow_router,
     ui_settings_router,
@@ -195,6 +196,7 @@ async def main() -> None:
         ("upwork_profiles", upwork_profiles_router),
         ("upwork_status", upwork_status_router),
         ("upwork_api", upwork_api_router),
+        ("upwork_public_test", upwork_public_test_router),
     ]
     for _, router in routers:
         dp.include_router(router)

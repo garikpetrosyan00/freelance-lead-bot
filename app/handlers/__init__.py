@@ -21,6 +21,7 @@ from .upwork_alerts import router as upwork_alerts_router
 from .upwork_api import router as upwork_api_router
 from .upwork_oauth import router as upwork_oauth_router
 from .upwork_profiles import router as upwork_profiles_router
+from .upwork_public_test import router as upwork_public_test_router
 from .upwork_status import router as upwork_status_router
 
 __all__ = [
@@ -45,5 +46,6 @@ __all__ = [
     "upwork_api_router",
     "upwork_oauth_router",
     "upwork_profiles_router",
+    "upwork_public_test_router",
     "upwork_status_router",
 ]

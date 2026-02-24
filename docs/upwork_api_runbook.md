@@ -1,12 +1,15 @@
 # Upwork API Runbook
 
 ## 1) Overview
-This bot uses official Upwork OAuth2 + GraphQL APIs (no scraping).  
+This bot supports two Upwork fetch modes:
+- `UPWORK_FETCH_MODE=public` (default): parses public Upwork search pages, no OAuth required.
+- `UPWORK_FETCH_MODE=oauth`: uses official Upwork OAuth2 + GraphQL APIs.
+
 Runtime has two processes:
 - Bot process (aiogram)
 - Web process (FastAPI) for OAuth connect/callback endpoints
 
-OAuth callback must be publicly reachable by Upwork.
+OAuth callback must be publicly reachable by Upwork only in `oauth` fetch mode.
 
 ## 2) Upwork App Setup
 In your Upwork app settings:
@@ -20,14 +23,15 @@ If redirect URL mismatches, OAuth code exchange fails.
 Core:
 - `BOT_TOKEN`: Telegram bot token.
 - `PUBLIC_BASE_URL`: Public base URL for web app (used for connect link), example `https://your-domain.com`.
-- `UPWORK_CLIENT_ID`: Upwork OAuth client ID.
-- `UPWORK_CLIENT_SECRET`: Upwork OAuth client secret.
-- `UPWORK_REDIRECT_URL`: OAuth callback URL (usually `${PUBLIC_BASE_URL}/upwork/callback`).
-- `UPWORK_TOKEN_ENCRYPTION_KEY`: Fernet key for token encryption at rest.
+- `UPWORK_CLIENT_ID`: Upwork OAuth client ID (`oauth` fetch mode only).
+- `UPWORK_CLIENT_SECRET`: Upwork OAuth client secret (`oauth` fetch mode only).
+- `UPWORK_REDIRECT_URL`: OAuth callback URL (usually `${PUBLIC_BASE_URL}/upwork/callback`) (`oauth` mode only).
+- `UPWORK_TOKEN_ENCRYPTION_KEY`: Fernet key for token encryption at rest (`oauth` mode only).
   - Generate:
   - `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
 Optional defaults:
+- `UPWORK_FETCH_MODE` (`public` default, `oauth` to require official app credentials)
 - `UPWORK_OAUTH_AUTHORIZE_URL` (default official authorize URL)
 - `UPWORK_OAUTH_TOKEN_URL` (default official token URL)
 - `UPWORK_GRAPHQL_URL` (default official GraphQL URL)
@@ -53,7 +57,7 @@ Web:
 - `GET /healthz` -> `ok`
 
 Telegram flow:
-1. `/upwork_connect` (starts OAuth)
+1. `/upwork_connect` (OAuth only; public mode responds with mode info)
 2. Complete OAuth in browser
 3. `/upwork_status` (verify connected, token expiry, profile counts, poll mode)
 4. `/upwork_test_api` (verify GraphQL call)
@@ -90,3 +94,8 @@ Profile management:
 - Default: `UPWORK_POLL_MODE=api` (recommended).
 - Legacy mode: `UPWORK_POLL_MODE=rss` for old RSS testing only.
 - Keep only one mode active to avoid duplicate sends.
+
+## 9) Fetch Mode
+- Default: `UPWORK_FETCH_MODE=public`.
+- `public`: profile polling works without connected Upwork OAuth accounts.
+- `oauth`: preserves existing connection requirement and auth-error disconnect/reconnect flow.

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from app import db
 from app.config import (
+    get_upwork_fetch_mode,
     get_upwork_rss_free_daily_cap,
     get_upwork_rss_min_matched_skills,
     get_upwork_rss_poll_seconds,
@@ -34,7 +35,7 @@ _BACKOFF_BASE_SECONDS = (30.0, 60.0, 120.0)
 _DAILY_COUNTER_RETENTION_DAYS = 60
 _AUTH_NOTIFY_COOLDOWN_SECONDS = 6 * 3600
 
-SearchFn = Callable[[int, str, int], Awaitable[list[dict[str, Any]]]]
+SearchFn = Callable[..., Awaitable[list[dict[str, Any]]]]
 SendFn = Callable[[int, str, Any | None], Awaitable[None]]
 
 
@@ -306,11 +307,20 @@ async def run_upwork_api_poll_cycle(
     state: _PollerState,
     semaphore: asyncio.Semaphore,
     search_fn: SearchFn | None = None,
+    fetch_mode: str | None = None,
 ) -> dict[str, int]:
+    mode = str(fetch_mode or get_upwork_fetch_mode()).strip().lower()
+    if mode not in {"public", "oauth"}:
+        raise RuntimeError("UPWORK_FETCH_MODE must be 'public' or 'oauth'")
     if search_fn is None:
-        from app.integrations.upwork.client import search_public_jobs
+        if mode == "oauth":
+            from app.integrations.upwork.client import search_public_jobs
 
-        search_fn = search_public_jobs
+            search_fn = search_public_jobs
+        else:
+            from app.integrations.upwork.public_search import search_public_jobs_public
+
+            search_fn = search_public_jobs_public
 
     stats = {
         "profiles_processed": 0,
@@ -338,34 +348,43 @@ async def run_upwork_api_poll_cycle(
         if now_mono < state.next_allowed_by_profile.get(profile_key, 0.0):
             return
 
-        account = db.upwork_oauth_get_account(user_id)
-        if not account or int(account.get("is_connected") or 0) != 1:
-            stats["skipped_not_connected"] += 1
-            return
-
         query = str(profile.get("query") or "").strip()
         if not query:
             return
 
         async with semaphore:
             try:
-                jobs = await search_fn(user_id, query, 20)
+                if mode == "oauth":
+                    account = db.upwork_oauth_get_account(user_id)
+                    if not account or int(account.get("is_connected") or 0) != 1:
+                        stats["skipped_not_connected"] += 1
+                        return
+                    jobs = await search_fn(user_id, query, 20)
+                else:
+                    jobs = await search_fn(query, 20)
             except UpworkAuthError as exc:
-                stats["auth_errors"] += 1
-                revoked_at_iso = datetime.now(timezone.utc).isoformat()
-                db.upwork_oauth_mark_disconnected(user_id, revoked_at_iso=revoked_at_iso)
-                if _should_notify_auth_issue(state, user_id, now_mono):
-                    await _send_alert(
-                        send_fn,
-                        user_id,
-                        profile_id,
-                        "⚠️ Upwork connection expired or was revoked. Please reconnect via /upwork_connect",
-                        reply_markup=None,
+                if mode == "oauth":
+                    stats["auth_errors"] += 1
+                    revoked_at_iso = datetime.now(timezone.utc).isoformat()
+                    db.upwork_oauth_mark_disconnected(user_id, revoked_at_iso=revoked_at_iso)
+                    if _should_notify_auth_issue(state, user_id, now_mono):
+                        await _send_alert(
+                            send_fn,
+                            user_id,
+                            profile_id,
+                            "⚠️ Upwork connection expired or was revoked. Please reconnect via /upwork_connect",
+                            reply_markup=None,
+                        )
+                    db.record_error(
+                        "upwork_api",
+                        exc,
+                        context={"user_id": user_id, "profile_id": profile_id, "action": "auth_error_disconnect"},
                     )
+                    return
                 db.record_error(
                     "upwork_api",
                     exc,
-                    context={"user_id": user_id, "profile_id": profile_id, "action": "auth_error_disconnect"},
+                    context={"user_id": user_id, "profile_id": profile_id, "action": "public_auth_error"},
                 )
                 return
             except asyncio.CancelledError:
@@ -380,7 +399,11 @@ async def run_upwork_api_poll_cycle(
                 db.record_error(
                     "upwork_api",
                     exc,
-                    context={"user_id": user_id, "profile_id": profile_id, "action": "search_public_jobs"},
+                    context={
+                        "user_id": user_id,
+                        "profile_id": profile_id,
+                        "action": "search_public_jobs_oauth" if mode == "oauth" else "search_public_jobs_public",
+                    },
                 )
                 return
 
@@ -506,12 +529,13 @@ async def run_upwork_api_poll_cycle(
 async def run_upwork_api_poller(bot: Bot) -> None:
     interval_seconds = max(60, get_upwork_rss_poll_seconds())
     seen_retention_days = max(1, get_upwork_rss_seen_retention_days())
+    fetch_mode = get_upwork_fetch_mode()
     state = _PollerState()
     state.next_cleanup_at = asyncio.get_running_loop().time() + _CLEANUP_INTERVAL_SECONDS
     semaphore = asyncio.Semaphore(_API_CONCURRENCY)
     loop = asyncio.get_running_loop()
 
-    logger.info("Upwork API poller started (interval=%ss)", interval_seconds)
+    logger.info("Upwork API poller started (interval=%ss fetch_mode=%s)", interval_seconds, fetch_mode)
 
     async def _bot_send(user_id: int, text: str, reply_markup: Any | None) -> None:
         await bot.send_message(
@@ -528,6 +552,7 @@ async def run_upwork_api_poller(bot: Bot) -> None:
                     send_fn=_bot_send,
                     state=state,
                     semaphore=semaphore,
+                    fetch_mode=fetch_mode,
                 )
                 logger.info(
                     "Upwork API cycle: profiles_processed=%s jobs_fetched=%s new_jobs=%s sent=%s skipped_not_connected=%s filtered_out_by_watermark=%s auth_errors=%s",

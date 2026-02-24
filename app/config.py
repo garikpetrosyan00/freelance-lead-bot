@@ -249,6 +249,18 @@ def get_upwork_graphql_url() -> str:
     return value or "https://api.upwork.com/graphql"
 
 
+def get_upwork_public_proxy() -> str | None:
+    value = os.getenv("UPWORK_PUBLIC_PROXY", "").strip()
+    return value or None
+
+
+def get_upwork_fetch_mode() -> str:
+    value = os.getenv("UPWORK_FETCH_MODE", "public").strip().lower()
+    if value not in {"public", "oauth"}:
+        raise RuntimeError("UPWORK_FETCH_MODE must be 'public' or 'oauth'")
+    return value
+
+
 def get_upwork_poll_mode() -> str:
     value = os.getenv("UPWORK_POLL_MODE", "api").strip().lower()
     if value not in {"api", "rss"}:
