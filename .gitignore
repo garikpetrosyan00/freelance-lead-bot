@@ -9,3 +9,4 @@ venv/
 *.session-journal
 .idea/
 .vscode/
+*.deb
