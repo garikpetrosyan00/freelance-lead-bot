@@ -1,8 +1,8 @@
 # Freelance Lead Bot
 
+## What It Does
 Automation system + Telegram bot that delivers real-time freelance job leads.
 Built with Python, it runs as a long-lived service and polls configured lead sources, matches jobs to user-defined skills, and sends alerts to Telegram users.
-The project includes bot runtime services plus an optional web service for Upwork OAuth callbacks.
 
 ## Key Features
 - Multi-source ingestion: Upwork RSS saved-search feeds, Upwork API polling mode, and optional Telegram ingestion/fake ingestion for local flows.
@@ -12,14 +12,13 @@ The project includes bot runtime services plus an optional web service for Upwor
 - Storage: SQLite-backed persistence layer for user prefs, plans, feeds, counters, and event/monitoring data.
 - Optional plan gating: FREE/PRO limits and usage caps are implemented and can be enabled via configuration.
 
-## Architecture (High Level)
+## High-level Architecture
 `Ingestion` -> `Processing/Filtering` -> `Storage` -> `Notification/Delivery`
 
 - Ingestion: background pollers/listeners collect leads (Upwork RSS/API, optional Telegram source ingestion).
 - Processing/Filtering: normalize lead text, match against user-selected skills, enforce plan/daily-cap rules.
 - Storage: persist state in SQLite (feeds, seen jobs, user skills, plans, analytics/monitoring tables).
 - Notification/Delivery: send matched leads to Telegram chats via aiogram handlers/jobs.
-- Supporting service: FastAPI app (`app.web`) handles Upwork OAuth connect/callback endpoints.
 
 ## Demo / Screenshots
 - (add screenshot of Telegram UI)
@@ -40,7 +39,7 @@ cp .env.example .env
 ```
 3. Edit local `.env` with your values (tokens/secrets stay local and must not be committed):
 - `BOT_TOKEN=...`
-- Optional integrations as needed (`UPWORK_*`, `STRIPE_*`, Telegram ingestion vars, etc.)
+- Optional integrations as needed (`UPWORK_*`, billing, and ingestion-related variables)
 - For local-safe run, use `DEMO_MODE=1`
 
 4. Run the Telegram bot service:
